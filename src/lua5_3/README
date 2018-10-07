@@ -1,0 +1,18 @@
+================================================================================
+  Lua 5.3 yacc grammar
+================================================================================
+
+This is an adaption of Lua's 5.3 grammar to Yacc. As well as several minor
+changes, there are two major changes. First, Lua's operator precedences are
+directly encoded in this grammar's rules (so there are several rules called
+exp[1-12]). Second, the inherent ambiguity in Lua's grammar (between function
+calls and statements) leads to 1 shift/reduce and 1 reduce/reduce conflict.
+Yacc's default disambiguation rules are used to resolve this ambiguity in favour
+of function calls.
+
+Note that the included lexer has one limitation: it cannot match arbitrary
+numbers of "="s in multi-line comments (due to an inherent limitation of regular
+expression). It therefore matches a predetermined number of "="s -- currently 5.
+This means that while "[==[...]==]" works, "[======[...]======]" does not work.
+This can, of course, be extended to a larger number, albeit at the cost of an
+ever-growing regular expression.
