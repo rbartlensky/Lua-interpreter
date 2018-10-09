@@ -5,14 +5,18 @@ extern crate lrtable;
 
 mod bytecode;
 mod errors;
+mod register_map;
+pub mod interpreter;
 
 use cfgrammar::RIdx;
 use lrpar::Node;
 use lrpar::Node::*;
 use std::fs::File;
 use std::io::prelude::*;
+use register_map::RegisterMap;
 use bytecode::LuaBytecode;
-use bytecode::instructions::Instr;
+use bytecode::instructions::Val::*;
+use bytecode::instructions::*;
 use errors::CliError;
 
 lrlex_mod!(lua5_3_l); // lua lexer
@@ -23,7 +27,7 @@ pub struct LuaParseTree {
     /// The original Lua code
     pub original_code: String,
     /// The root of the parse tree
-    pub tree: Node<u8>,
+    pub tree: Node<u8>
 }
 
 impl LuaParseTree {
@@ -41,25 +45,26 @@ impl LuaParseTree {
 
         Ok(LuaParseTree {
             original_code: contents.clone(),
-            tree,
+            tree
         })
     }
 
     /// Compile the parse tree to an intermmediate representation.
     pub fn compile_to_ir(&self) -> LuaBytecode {
-        let mut bytecode = LuaBytecode::new();
+        let mut instrs = vec![];
         let mut pt_nodes: Vec<&Node<u8>> = vec![&self.tree];
+        let mut reg_map = RegisterMap::new();
         while !pt_nodes.is_empty() {
             let node = pt_nodes.pop().unwrap(); // always checked if it is empty
             match *node {
                 Nonterm{ridx: RIdx(ridx), ref nodes} if ridx == lua5_3_y::R_STAT => {
-                    assert!(nodes.len() == 3);
+                    debug_assert!(nodes.len() == 3);
                     match nodes[1] {
                         Term{lexeme} if lexeme.tok_id() == lua5_3_l::T_EQ => {
-                            let label = self.compile_variable(&nodes[0]);
-                            bytecode.add_var(label.clone());
-                            let expr = self.compile_expr(&nodes[2], &mut bytecode);
-                            bytecode.add_instr(Instr::Mov(label, expr));
+                            let id = self.compile_variable(&nodes[0]);
+                            let value = self.compile_expr(&nodes[2], &mut instrs, &mut reg_map);
+                            let reg = reg_map.get_reg(&id);
+                            instrs.push(Instr::Mov(reg, value));
                         },
                         _ => {}
                     }
@@ -72,59 +77,61 @@ impl LuaParseTree {
                 _ => { continue; }
             }
         }
-        bytecode
+        LuaBytecode::new(instrs, reg_map.get_registers())
     }
 
-    fn compile_variable(&self, node: &Node<u8>) -> String {
+    /// Jumps to the first child of <node> which denotes a variable name.
+    fn compile_variable<'a>(&'a self, node: &Node<u8>) -> &'a str {
         let name = LuaParseTree::find_term(node, lua5_3_l::T_NAME);
         match name {
             Some(Term{lexeme}) =>
-                self.get_string(lexeme.start(), lexeme.end()).to_string(),
+                self.get_string(lexeme.start(), lexeme.end()),
             _ => { panic!("Must have assignments of form: var = expr!"); }
         }
     }
 
     /// Compile the expression rooted at <node>. Any instructions that are created are
     /// simply added to the bytecode that is being generated.
-    fn compile_expr(&self, node: &Node<u8>, bytecode: &mut LuaBytecode) -> String {
+    fn compile_expr(&self, node: &Node<u8>, instrs: &mut Vec<Instr>,
+                    reg_map: &mut RegisterMap) -> Val {
         match *node {
             Nonterm{ridx: RIdx(_ridx), ref nodes} => {
                 if nodes.len() == 1 {
-                    self.compile_expr(&nodes[0], bytecode)
+                    self.compile_expr(&nodes[0], instrs, reg_map)
                 } else {
                     assert!(nodes.len() == 3);
-                    let left = self.compile_expr(&nodes[0], bytecode);
-                    let right = self.compile_expr(&nodes[2], bytecode);
-                    let new_var = bytecode.get_new_var();
-                    bytecode.add_instr(self.get_instr(&nodes[1], new_var.clone(), left, right));
-                    new_var
+                    let left = self.compile_expr(&nodes[0], instrs, reg_map);
+                    let right = self.compile_expr(&nodes[2], instrs, reg_map);
+                    let new_var = reg_map.new_reg();
+                    instrs.push(self.get_instr(&nodes[1], Reg::new(new_var), left, right));
+                    Register(new_var)
                 }
             },
             Term{lexeme} => {
-                let value = &self.original_code[lexeme.start()..lexeme.end()];
+                let value = self.get_string(lexeme.start(), lexeme.end());
                 if lexeme.tok_id() == lua5_3_l::T_NUMERAL {
-                    value.to_string()
+                    LuaValue(Value::Number(value.parse().unwrap()))
                 } else {
-                    let var_name = value.to_string();
-                    bytecode.add_var(var_name.clone());
-                    var_name
+                    let reg = reg_map.get_reg(value);
+                    Register(reg)
                 }
             }
         }
     }
 
-    fn get_instr(&self, node: &Node<u8>, store: String, lhs: String, rhs: String) -> Instr {
+    /// Get the appropriate instruction for a given Node::Term.
+    fn get_instr(&self, node: &Node<u8>, reg: Reg, lhs: Val, rhs: Val) -> Instr {
         if let Term{lexeme} = node {
             match lexeme.tok_id() {
-                lua5_3_l::T_PLUS => Instr::Add(store, lhs, rhs),
-                lua5_3_l::T_MINUS => Instr::Sub(store, lhs, rhs),
-                lua5_3_l::T_STAR => Instr::Mul(store, lhs, rhs),
-                lua5_3_l::T_FSLASH => Instr::Div(store, lhs, rhs),
-                lua5_3_l::T_MOD => Instr::Mod(store, lhs, rhs),
-                _ => panic!("Unimplemented!")
+                lua5_3_l::T_PLUS => Instr::Add(reg.id(), lhs, rhs),
+                lua5_3_l::T_MINUS => Instr::Sub(reg.id(), lhs, rhs),
+                lua5_3_l::T_STAR => Instr::Mul(reg.id(), lhs, rhs),
+                lua5_3_l::T_FSLASH => Instr::Div(reg.id(), lhs, rhs),
+                lua5_3_l::T_MOD => Instr::Mod(reg.id(), lhs, rhs),
+                _ => unimplemented!("Instruction {}", lexeme.tok_id())
             }
         } else {
-            panic!("Unimplemented!");
+            panic!("Expected a Node::Term!");
         }
     }
 
