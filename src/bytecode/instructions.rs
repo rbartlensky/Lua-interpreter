@@ -1,6 +1,5 @@
-use std::cmp::{Ord, Ordering, PartialOrd};
+use std::cmp::{Ordering, PartialOrd};
 use std::fmt::{Display, Formatter, Result};
-use bytecode::LuaBytecode;
 
 /// This enum represents all possible Lua values.
 #[derive(Clone, Debug)]
@@ -37,69 +36,10 @@ impl Display for Value {
     }
 }
 
-#[derive(Clone)]
-pub struct Reg {
-    id: usize,
-    value: Value
-}
-
-impl Reg {
-    pub fn new(id: usize) -> Reg {
-        Reg { id, value: Value::Nil }
-    }
-
-    pub fn id(&self) -> usize {
-        self.id
-    }
-
-    pub fn get_value(&self) -> &Value {
-        &self.value
-    }
-
-    pub fn set_value(&mut self, value: Value) {
-        self.value = value;
-    }
-}
-
-impl Display for Reg {
-    fn fmt(&self, f: &mut Formatter) -> Result {
-        write!(f, "{} = {}", self.id, self.value)
-    }
-}
-
-impl PartialEq for Reg {
-    fn eq(&self, other: &Reg) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for Reg {}
-
-impl PartialOrd for Reg {
-    fn partial_cmp(&self, other: &Reg) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Reg {
-    fn cmp(&self, other: &Reg) -> Ordering {
-        self.id.cmp(&other.id)
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Val {
     LuaValue(Value),
     Register(usize)
-}
-
-impl Val {
-    pub fn get_value<'a>(&'a self, bytecode: &'a LuaBytecode) -> &'a Value {
-        match *self {
-            Val::LuaValue(ref value) => &value,
-            Val::Register(reg) => bytecode.get_value(reg)
-        }
-    }
 }
 
 impl Display for Val {

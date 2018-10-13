@@ -1,17 +1,17 @@
-use std::vec::Vec;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use bytecode::instructions::Reg;
 
+/// Represents a structure that is used to keep track of the mapping
+/// between Lua variables and register ids.
 pub struct RegisterMap {
-    registers: RefCell<Vec<Reg>>,
+    reg_count: RefCell<usize>,
     reg_map: RefCell<HashMap<String, usize>>
 }
 
 impl RegisterMap {
     pub fn new() -> RegisterMap {
         RegisterMap {
-            registers: RefCell::new(vec![]),
+            reg_count: RefCell::new(0),
             reg_map: RefCell::new(HashMap::new())
         }
     }
@@ -20,9 +20,9 @@ impl RegisterMap {
     /// This is used in cases like `x = 1 + 2 + 3` to generate intermmediate
     /// registers in which, for instance, the result of 2 + 3 is stored.
     pub fn new_reg(&self) -> usize {
-        let len = self.registers.borrow().len();
-        self.registers.borrow_mut().push(Reg::new(len));
-        len + 1
+        let to_return = *self.reg_count.borrow();
+        *self.reg_count.borrow_mut() += 1;
+        to_return
     }
 
     /// Get the register that corresponds to the given identifier.
@@ -32,7 +32,8 @@ impl RegisterMap {
         *self.reg_map.borrow_mut().entry(name.to_string()).or_insert(self.new_reg())
     }
 
-    pub fn get_registers(self) -> Vec<Reg> {
-        self.registers.borrow_mut().to_vec()
+    /// Get the total number of registers that were needed.
+    pub fn reg_count(self) -> usize {
+        *self.reg_count.borrow_mut()
     }
 }
