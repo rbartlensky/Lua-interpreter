@@ -29,11 +29,44 @@ impl RegisterMap {
     /// If the corresponding register is not found, a new register is created
     /// and returned.
     pub fn get_reg(&self, name: &str) -> usize {
-        *self.reg_map.borrow_mut().entry(name.to_string()).or_insert(self.new_reg())
+        *self.reg_map.borrow_mut().entry(name.to_string())
+            .or_insert_with(|| self.new_reg())
     }
 
     /// Get the total number of registers that were needed.
     pub fn reg_count(self) -> usize {
         *self.reg_count.borrow_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_reg_correctly_increments_counter() {
+        let rm = RegisterMap::new();
+        for i in 0..10 {
+            assert_eq!(rm.new_reg(), i);
+            assert_eq!(*rm.reg_count.borrow(), i+1);
+        }
+        assert_eq!(rm.reg_count(), 10);
+    }
+
+    #[test]
+    fn get_reg_correctly_maps_strings_to_registers() {
+        let rm = RegisterMap::new();
+        // create a new register
+        assert_eq!(rm.new_reg(), 0);
+        assert_eq!(*rm.reg_count.borrow(), 1);
+        // create a mapping
+        assert_eq!(rm.get_reg("foo"), 1);
+        assert_eq!(*rm.reg_count.borrow(), 2);
+        assert_eq!(*rm.reg_map.borrow().get("foo").unwrap(), 1);
+        assert_eq!(rm.get_reg("foo"), 1);
+        assert_eq!(*rm.reg_map.borrow().get("foo").unwrap(), 1);
+        assert_eq!(*rm.reg_count.borrow(), 2);
+        // test total number of registers created
+        assert_eq!(rm.reg_count(), 2);
     }
 }
