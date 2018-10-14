@@ -2,19 +2,19 @@ pub mod instructions;
 
 use std::vec::Vec;
 use std::fmt;
-use self::instructions::{Reg, Instr, Value};
+use self::instructions::{Instr};
 
 /// A simpler representation of Lua
 pub struct LuaBytecode {
     block: Vec<Instr>,
-    registers: Vec<Reg>
+    reg_count: usize
 }
 
 impl LuaBytecode {
-    pub fn new(instrs: Vec<Instr>, registers: Vec<Reg>) -> LuaBytecode {
+    pub fn new(instrs: Vec<Instr>, reg_count: usize) -> LuaBytecode {
         LuaBytecode {
             block: instrs,
-            registers,
+            reg_count,
         }
     }
 
@@ -25,17 +25,14 @@ impl LuaBytecode {
 
     /// Get the list of instructions that can be executed in order
     /// to perform some computation.
-    pub fn get_instr(&self, index: usize) -> Instr {
-        self.block[index].clone()
+    pub fn get_instr(&self, index: usize) -> &Instr {
+        &self.block[index]
     }
 
-    /// Set the register to the given value
-    pub fn set_value(&mut self, id: usize, value: Value) {
-        self.registers[id].set_value(value);
-    }
-
-    pub fn get_value(&self, id: usize) -> &Value {
-        self.registers[id].get_value()
+    /// Get the number of registers that this bytecode uses in order to encode
+    /// instructions.
+    pub fn reg_count(&self) -> usize {
+        self.reg_count
     }
 }
 
@@ -53,25 +50,17 @@ impl fmt::Display for LuaBytecode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::instructions::*;
 
     #[test]
     fn bytecode_works_correctly() {
         let instrs = vec![
-            Instr::Mov(0, instructions::Val::LuaValue(Value::Nil))
+            Instr::Mov(0, Val::LuaValue(Value::Nil))
         ];
-        let registers = vec![
-            Reg::new(0),
-            Reg::new(1)
-        ];
-        let mut bc = LuaBytecode::new(instrs, registers);
-        // check if register values are correctly updated
-        assert_eq!(*bc.get_value(0), Value::Nil);
-        assert_eq!(*bc.get_value(1), Value::Nil);
-        bc.set_value(0, Value::Boolean(false));
-        assert_eq!(*bc.get_value(0), Value::Boolean(false));
-
+        let mut bc = LuaBytecode::new(instrs, 3);
+        assert_eq!(bc.reg_count(), 3);
         assert_eq!(bc.instrs_len(), 1);
-        assert_eq!(bc.get_instr(0),
+        assert_eq!(*bc.get_instr(0),
                    Instr::Mov(0, instructions::Val::LuaValue(Value::Nil)));
     }
 }

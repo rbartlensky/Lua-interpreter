@@ -77,7 +77,7 @@ impl LuaParseTree {
                 _ => { continue; }
             }
         }
-        LuaBytecode::new(instrs, reg_map.get_registers())
+        LuaBytecode::new(instrs, reg_map.reg_count())
     }
 
     /// Jumps to the first child of <node> which denotes a variable name.
@@ -103,7 +103,7 @@ impl LuaParseTree {
                     let left = self.compile_expr(&nodes[0], instrs, reg_map);
                     let right = self.compile_expr(&nodes[2], instrs, reg_map);
                     let new_var = reg_map.new_reg();
-                    instrs.push(self.get_instr(&nodes[1], Reg::new(new_var), left, right));
+                    instrs.push(self.get_instr(&nodes[1], new_var, left, right));
                     Register(new_var)
                 }
             },
@@ -120,14 +120,14 @@ impl LuaParseTree {
     }
 
     /// Get the appropriate instruction for a given Node::Term.
-    fn get_instr(&self, node: &Node<u8>, reg: Reg, lhs: Val, rhs: Val) -> Instr {
+    fn get_instr(&self, node: &Node<u8>, reg: usize, lhs: Val, rhs: Val) -> Instr {
         if let Term{lexeme} = node {
             match lexeme.tok_id() {
-                lua5_3_l::T_PLUS => Instr::Add(reg.id(), lhs, rhs),
-                lua5_3_l::T_MINUS => Instr::Sub(reg.id(), lhs, rhs),
-                lua5_3_l::T_STAR => Instr::Mul(reg.id(), lhs, rhs),
-                lua5_3_l::T_FSLASH => Instr::Div(reg.id(), lhs, rhs),
-                lua5_3_l::T_MOD => Instr::Mod(reg.id(), lhs, rhs),
+                lua5_3_l::T_PLUS => Instr::Add(reg, lhs, rhs),
+                lua5_3_l::T_MINUS => Instr::Sub(reg, lhs, rhs),
+                lua5_3_l::T_STAR => Instr::Mul(reg, lhs, rhs),
+                lua5_3_l::T_FSLASH => Instr::Div(reg, lhs, rhs),
+                lua5_3_l::T_MOD => Instr::Mod(reg, lhs, rhs),
                 _ => unimplemented!("Instruction {}", lexeme.tok_id())
             }
         } else {
