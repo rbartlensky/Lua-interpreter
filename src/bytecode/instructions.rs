@@ -6,7 +6,8 @@ use std::fmt::{Display, Formatter, Result};
 pub enum Value {
     Nil,
     Boolean(bool),
-    Number(f64),
+    Integer(i64),
+    Float(f64),
     Str(String),
 }
 
@@ -15,7 +16,8 @@ impl PartialEq for Value {
         match (self, other) {
             (Value::Nil, Value::Nil) => true,
             (Value::Boolean(l), Value::Boolean(r)) => l == r,
-            (Value::Number(l), Value::Number(r)) =>
+            (Value::Integer(l), Value::Integer(r)) => l == r,
+            (Value::Float(l), Value::Float(r)) =>
                 l.partial_cmp(r).unwrap() == Ordering::Equal,
             (Value::Str(l), Value::Str(r)) => l == r,
             (_, _) => false
@@ -30,7 +32,8 @@ impl Display for Value {
         match *self {
             Value::Nil => write!(f, "Nil"),
             Value::Boolean(b) => write!(f, "{}", b.to_string()),
-            Value::Number(float) => write!(f, "{}", float),
+            Value::Integer(int) => write!(f, "{}", int),
+            Value::Float(float) => write!(f, "{}", float),
             Value::Str(ref content) => write!(f, "\"{}\"", content),
         }
     }
@@ -59,7 +62,8 @@ pub enum Instr {
     Sub(usize, Val, Val),
     Mul(usize, Val, Val),
     Div(usize, Val, Val),
-    Mod(usize, Val, Val)
+    Mod(usize, Val, Val),
+    FDiv(usize, Val, Val)
 }
 
 impl Display for Instr {
@@ -76,6 +80,8 @@ impl Display for Instr {
                 write!(f, "(div ${} {} {})", reg, lhs, rhs),
             Instr::Mod(reg, ref lhs, ref rhs) =>
                 write!(f, "(mod ${} {} {})", reg, lhs, rhs),
+            Instr::FDiv(reg, ref lhs, ref rhs) =>
+                write!(f, "(mod ${} {} {})", reg, lhs, rhs)
         }
     }
 }
