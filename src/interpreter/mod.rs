@@ -59,6 +59,10 @@ impl Interpreter {
                 FDiv(reg, ref lhs, ref rhs) => {
                     let res = fdiv(self.get_value(lhs), self.get_value(rhs));
                     self.registers[reg].set_value(res);
+                },
+                Exp(reg, ref lhs, ref rhs) => {
+                    let res = exp(self.get_value(lhs), self.get_value(rhs));
+                    self.registers[reg].set_value(res);
                 }
             }
             pc += 1;
@@ -80,7 +84,7 @@ mod tests {
     #[test]
     fn interpreter_works_correctly() {
         let mut regs = vec![];
-        for i in 0..7 {
+        for i in 0..8 {
             regs.push(i);
         }
         let instrs = vec![
@@ -97,6 +101,8 @@ mod tests {
                 Val::LuaValue(Value::Float(2.0))),
             FDiv(regs[6], Val::LuaValue(Value::Float(3.0)),
                  Val::LuaValue(Value::Float(2.0))),
+            Exp(regs[7], Val::LuaValue(Value::Float(1.0)),
+                 Val::LuaValue(Value::Float(2.0)))
         ];
         let bytecode = LuaBytecode::new(instrs, regs.len());
         let expected = vec![
@@ -104,6 +110,7 @@ mod tests {
             Value::Float(2.0),
             Value::Float(0.0),
             Value::Float(2.0),
+            Value::Float(1.0),
             Value::Float(1.0),
             Value::Float(1.0),
             Value::Float(1.0)

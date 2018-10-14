@@ -8,18 +8,18 @@ use bytecode::instructions::Value::*;
 /// # Panics
 /// This panics when one of the arguments is a Bool or a Nil.
 fn to_int_or_float(lhs: &Value, rhs: &Value) -> (Value, Value) {
-    match (lhs, rhs) {
-        (Float(l), Float(r)) => (Float(*l), Float(*r)),
-        (Float(l), Integer(r)) => (Float(*l), Float(*r as f64)),
-        (Float(l), Str(r)) => (Float(*l), Float(r.parse().unwrap())),
-        (Integer(l), Float(r)) => (Float(*l as f64), Float(*r)),
-        (Integer(l), Integer(r)) => (Integer(*l), Integer(*r)),
-        (Integer(l), Str(r)) => (Float(*l as f64), Float(r.parse().unwrap())),
-        (Str(l), Float(r)) => (Float(l.parse().unwrap()), Float(*r)),
-        (Str(l), Integer(r)) => (Float(l.parse().unwrap()), Float(*r as f64)),
-        (Str(l), Str(r)) => (Float(l.parse().unwrap()), Float(r.parse().unwrap())),
-        (_, _ ) => panic!("Cannot convert to float or int {}, {}", lhs, rhs)
+    let l;
+    let r;
+    if lhs.is_float() || rhs.is_float() {
+        let msg = "Could not convert to float.";
+        l = Float(lhs.to_float().expect(msg));
+        r = Float(rhs.to_float().expect(msg));
+    } else {
+        let msg = "Could not convert to int.";
+        l = Integer(lhs.to_int().expect(msg));
+        r = Integer(rhs.to_int().expect(msg));
     }
+    (l, r)
 }
 
 pub fn add(lhs: &Value, rhs: &Value) -> Value {
@@ -47,10 +47,9 @@ pub fn mul(lhs: &Value, rhs: &Value) -> Value {
 }
 
 pub fn div(lhs: &Value, rhs: &Value) -> Value {
-    match to_int_or_float(lhs, rhs) {
-        (Float(l), Float(r)) => Float(l / r),
-        (Integer(l), Integer(r)) => Integer(l / r),
-        (_, _) => unreachable!()
+    match (lhs.to_float(), rhs.to_float()) {
+        (Option::Some(l), Option::Some(r)) => Float(l / r),
+        (_, _) => panic!("Argument could not be converted to float!")
     }
 }
 
@@ -67,6 +66,13 @@ pub fn fdiv(lhs: &Value, rhs: &Value) -> Value {
         (Float(l), Float(r)) => Float((l / r).floor()),
         (Integer(l), Integer(r)) => Integer(l / r),
         (_, _) => unreachable!()
+    }
+}
+
+pub fn exp(lhs: &Value, rhs: &Value) -> Value {
+    match (lhs.to_float(), rhs.to_float()) {
+        (Option::Some(l), Option::Some(r)) => Float(l.powf(r)),
+        (_, _) => panic!("Argument could not be converted to float!")
     }
 }
 
@@ -122,7 +128,7 @@ mod tests {
     #[test]
     fn test_div() {
         let expected = vec![
-            Integer(1), Float(1.0), Float(1.0),
+            Float(1.0), Float(1.0), Float(1.0),
             Float(1.0), Float(1.0), Float(1.0),
             Float(1.0), Float(1.0), Float(1.0),
         ];
@@ -147,5 +153,15 @@ mod tests {
             Float(1.0), Float(1.0), Float(1.0),
         ];
         test_operation(expected, fdiv);
+    }
+
+    #[test]
+    fn test_exp() {
+        let expected = vec![
+            Float(4.0), Float(4.0), Float(4.0),
+            Float(4.0), Float(4.0), Float(4.0),
+            Float(4.0), Float(4.0), Float(4.0),
+        ];
+        test_operation(expected, exp);
     }
 }

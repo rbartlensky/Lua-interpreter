@@ -11,6 +11,38 @@ pub enum Value {
     Str(String),
 }
 
+impl Value {
+    /// Check whether the Value can be converted into a Float.
+    pub fn is_float(&self) -> bool {
+        match self {
+            Value::Float(_) | Value::Str(_) => true,
+            _ => false
+        }
+    }
+
+    /// Convert the Value to an f64. This conversion returns Some when the value is
+    /// either an Integer, a Float or a Str.
+    /// In Lua, string are always converted to floats when they are used in
+    /// arithmetic expressions.
+    pub fn to_float(&self) -> Option<f64> {
+        match self {
+            Value::Integer(value) => Some(*value as f64),
+            Value::Float(value) => Some(*value),
+            Value::Str(value) => value.parse().ok(),
+            _ => None
+        }
+    }
+
+    /// Convert the Value to an i64. This conversion returns Some when the value is
+    /// an Integer.
+    pub fn to_int(&self) -> Option<i64> {
+        match self {
+            Value::Integer(value) => Some(*value),
+            _ => None
+        }
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Value) -> bool {
         match (self, other) {
@@ -63,7 +95,8 @@ pub enum Instr {
     Mul(usize, Val, Val),
     Div(usize, Val, Val),
     Mod(usize, Val, Val),
-    FDiv(usize, Val, Val)
+    FDiv(usize, Val, Val),
+    Exp(usize, Val, Val)
 }
 
 impl Display for Instr {
@@ -81,7 +114,9 @@ impl Display for Instr {
             Instr::Mod(reg, ref lhs, ref rhs) =>
                 write!(f, "(mod ${} {} {})", reg, lhs, rhs),
             Instr::FDiv(reg, ref lhs, ref rhs) =>
-                write!(f, "(mod ${} {} {})", reg, lhs, rhs)
+                write!(f, "(fdiv ${} {} {})", reg, lhs, rhs),
+            Instr::Exp(reg, ref lhs, ref rhs) =>
+                write!(f, "(exp ${} {} {})", reg, lhs, rhs)
         }
     }
 }
