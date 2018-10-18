@@ -6,8 +6,41 @@ use std::fmt::{Display, Formatter, Result};
 pub enum Value {
     Nil,
     Boolean(bool),
-    Number(f64),
+    Integer(i64),
+    Float(f64),
     Str(String),
+}
+
+impl Value {
+    /// Check whether the Value can be converted into a Float.
+    pub fn is_float(&self) -> bool {
+        match self {
+            Value::Float(_) | Value::Str(_) => true,
+            _ => false
+        }
+    }
+
+    /// Convert the Value to an f64. This conversion returns Some when the value is
+    /// either an Integer, a Float or a Str.
+    /// In Lua, string are always converted to floats when they are used in
+    /// arithmetic expressions.
+    pub fn to_float(&self) -> Option<f64> {
+        match self {
+            Value::Integer(value) => Some(*value as f64),
+            Value::Float(value) => Some(*value),
+            Value::Str(value) => value.parse().ok(),
+            _ => None
+        }
+    }
+
+    /// Convert the Value to an i64. This conversion returns Some when the value is
+    /// an Integer.
+    pub fn to_int(&self) -> Option<i64> {
+        match self {
+            Value::Integer(value) => Some(*value),
+            _ => None
+        }
+    }
 }
 
 impl PartialEq for Value {
@@ -15,7 +48,8 @@ impl PartialEq for Value {
         match (self, other) {
             (Value::Nil, Value::Nil) => true,
             (Value::Boolean(l), Value::Boolean(r)) => l == r,
-            (Value::Number(l), Value::Number(r)) =>
+            (Value::Integer(l), Value::Integer(r)) => l == r,
+            (Value::Float(l), Value::Float(r)) =>
                 l.partial_cmp(r).unwrap() == Ordering::Equal,
             (Value::Str(l), Value::Str(r)) => l == r,
             (_, _) => false
@@ -30,7 +64,8 @@ impl Display for Value {
         match *self {
             Value::Nil => write!(f, "Nil"),
             Value::Boolean(b) => write!(f, "{}", b.to_string()),
-            Value::Number(float) => write!(f, "{}", float),
+            Value::Integer(int) => write!(f, "{}", int),
+            Value::Float(float) => write!(f, "{}", float),
             Value::Str(ref content) => write!(f, "\"{}\"", content),
         }
     }
@@ -59,7 +94,9 @@ pub enum Instr {
     Sub(usize, Val, Val),
     Mul(usize, Val, Val),
     Div(usize, Val, Val),
-    Mod(usize, Val, Val)
+    Mod(usize, Val, Val),
+    FDiv(usize, Val, Val),
+    Exp(usize, Val, Val)
 }
 
 impl Display for Instr {
@@ -76,6 +113,10 @@ impl Display for Instr {
                 write!(f, "(div ${} {} {})", reg, lhs, rhs),
             Instr::Mod(reg, ref lhs, ref rhs) =>
                 write!(f, "(mod ${} {} {})", reg, lhs, rhs),
+            Instr::FDiv(reg, ref lhs, ref rhs) =>
+                write!(f, "(fdiv ${} {} {})", reg, lhs, rhs),
+            Instr::Exp(reg, ref lhs, ref rhs) =>
+                write!(f, "(exp ${} {} {})", reg, lhs, rhs)
         }
     }
 }

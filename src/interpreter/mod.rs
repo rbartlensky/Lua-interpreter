@@ -1,3 +1,4 @@
+mod arithmetic_operators;
 mod register;
 
 use bytecode::LuaBytecode;
@@ -5,6 +6,7 @@ use bytecode::instructions::Value;
 use bytecode::instructions::Val;
 use bytecode::instructions::Instr::*;
 use self::register::Reg;
+use self::arithmetic_operators::*;
 
 /// Represents a `LuaBytecode` interpreter.
 pub struct Interpreter {
@@ -35,39 +37,35 @@ impl Interpreter {
                     self.registers[reg].set_value(val);
                 },
                 Add(reg, ref lhs, ref rhs) => {
-                    let res = self.eval_arithmetic_op(&lhs, &rhs, lua_add);
+                    let res = add(self.get_value(lhs), self.get_value(rhs));
                     self.registers[reg].set_value(res);
                 },
                 Sub(reg, ref lhs, ref rhs) => {
-                    let res = self.eval_arithmetic_op(&lhs, &rhs, lua_sub);
+                    let res = sub(self.get_value(lhs), self.get_value(rhs));
                     self.registers[reg].set_value(res);
                 },
                 Mul(reg, ref lhs, ref rhs) => {
-                    let res = self.eval_arithmetic_op(&lhs, &rhs, lua_mul);
+                    let res = mul(self.get_value(lhs), self.get_value(rhs));
                     self.registers[reg].set_value(res);
                 },
                 Div(reg, ref lhs, ref rhs) => {
-                    let res = self.eval_arithmetic_op(&lhs, &rhs, lua_div);
+                    let res = div(self.get_value(lhs), self.get_value(rhs));
                     self.registers[reg].set_value(res);
                 },
                 Mod(reg, ref lhs, ref rhs) => {
-                    let res = self.eval_arithmetic_op(&lhs, &rhs, lua_mod);
+                    let res = modulus(self.get_value(lhs), self.get_value(rhs));
+                    self.registers[reg].set_value(res);
+                },
+                FDiv(reg, ref lhs, ref rhs) => {
+                    let res = fdiv(self.get_value(lhs), self.get_value(rhs));
+                    self.registers[reg].set_value(res);
+                },
+                Exp(reg, ref lhs, ref rhs) => {
+                    let res = exp(self.get_value(lhs), self.get_value(rhs));
                     self.registers[reg].set_value(res);
                 }
             }
             pc += 1;
-        }
-    }
-
-    /// Apply <op> to the given `Value`s.
-    fn eval_arithmetic_op(&self, lhs: &Val, rhs: &Val,
-                          op: fn(f64, f64) -> Value) -> Value {
-        let lhs = self.get_value(lhs);
-        let rhs = self.get_value(rhs);
-        match (lhs, rhs) {
-            (Value::Number(l), Value::Number(r)) => op(*l, *r),
-            (_, _) =>
-                panic!("Unable to perform arithmetic on {} and {}", lhs, rhs)
         }
     }
 
@@ -79,13 +77,6 @@ impl Interpreter {
     }
 }
 
-// Functions that are used in the interpreter in order to minimise duplication
-fn lua_add(lhs: f64, rhs: f64) -> Value { Value::Number(lhs + rhs) }
-fn lua_sub(lhs: f64, rhs: f64) -> Value { Value::Number(lhs - rhs) }
-fn lua_mul(lhs: f64, rhs: f64) -> Value { Value::Number(lhs * rhs) }
-fn lua_div(lhs: f64, rhs: f64) -> Value { Value::Number(lhs / rhs) }
-fn lua_mod(lhs: f64, rhs: f64) -> Value { Value::Number(lhs % rhs) }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,30 +84,36 @@ mod tests {
     #[test]
     fn interpreter_works_correctly() {
         let mut regs = vec![];
-        for i in 0..6 {
+        for i in 0..8 {
             regs.push(i);
         }
         let instrs = vec![
-            Mov(regs[0], Val::LuaValue(Value::Number(0.0))),
-            Add(regs[1], Val::LuaValue(Value::Number(1.0)),
-                Val::LuaValue(Value::Number(1.0))),
-            Sub(regs[2], Val::LuaValue(Value::Number(1.0)),
-                Val::LuaValue(Value::Number(1.0))),
-            Mul(regs[3], Val::LuaValue(Value::Number(1.0)),
-                Val::LuaValue(Value::Number(2.0))),
-            Div(regs[4], Val::LuaValue(Value::Number(2.0)),
-                Val::LuaValue(Value::Number(2.0))),
-            Mod(regs[5], Val::LuaValue(Value::Number(3.0)),
-                Val::LuaValue(Value::Number(2.0))),
+            Mov(regs[0], Val::LuaValue(Value::Float(0.0))),
+            Add(regs[1], Val::LuaValue(Value::Float(1.0)),
+                Val::LuaValue(Value::Float(1.0))),
+            Sub(regs[2], Val::LuaValue(Value::Float(1.0)),
+                Val::LuaValue(Value::Float(1.0))),
+            Mul(regs[3], Val::LuaValue(Value::Float(1.0)),
+                Val::LuaValue(Value::Float(2.0))),
+            Div(regs[4], Val::LuaValue(Value::Float(2.0)),
+                Val::LuaValue(Value::Float(2.0))),
+            Mod(regs[5], Val::LuaValue(Value::Float(3.0)),
+                Val::LuaValue(Value::Float(2.0))),
+            FDiv(regs[6], Val::LuaValue(Value::Float(3.0)),
+                 Val::LuaValue(Value::Float(2.0))),
+            Exp(regs[7], Val::LuaValue(Value::Float(1.0)),
+                 Val::LuaValue(Value::Float(2.0)))
         ];
         let bytecode = LuaBytecode::new(instrs, regs.len());
         let expected = vec![
-            Value::Number(0.0),
-            Value::Number(2.0),
-            Value::Number(0.0),
-            Value::Number(2.0),
-            Value::Number(1.0),
-            Value::Number(1.0),
+            Value::Float(0.0),
+            Value::Float(2.0),
+            Value::Float(0.0),
+            Value::Float(2.0),
+            Value::Float(1.0),
+            Value::Float(1.0),
+            Value::Float(1.0),
+            Value::Float(1.0)
         ];
 
         let mut interpreter = Interpreter::new(bytecode);

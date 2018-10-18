@@ -110,7 +110,11 @@ impl LuaParseTree {
             Term{lexeme} => {
                 let value = self.get_string(lexeme.start(), lexeme.end());
                 if lexeme.tok_id() == lua5_3_l::T_NUMERAL {
-                    LuaValue(Value::Number(value.parse().unwrap()))
+                    LuaValue(if value.contains(".") {
+                        Value::Float(value.parse().unwrap())
+                    } else {
+                        Value::Integer(value.parse().unwrap())
+                    })
                 } else {
                     let reg = reg_map.get_reg(value);
                     Register(reg)
