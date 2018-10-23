@@ -1,7 +1,9 @@
 extern crate luacompiler;
 
-use luacompiler::LuaParseTree;
-use luacompiler::bytecode::instructions::{ make_instr, Opcode };
+use luacompiler::{
+    bytecode::instructions::{make_instr, Opcode},
+    LuaParseTree,
+};
 
 #[test]
 fn ldi_generation() {
@@ -47,7 +49,6 @@ fn assert_bytecode(opcode: Opcode, operation: &str) {
     assert_eq!(bc.get_instr(1), make_instr(Opcode::LDI, 1, 1, 0));
     assert_eq!(bc.get_instr(2), make_instr(opcode, 2, 0, 1));
     assert_eq!(bc.get_instr(3), make_instr(Opcode::MOV, 3, 2, 0));
-
 }
 
 #[test]

@@ -1,11 +1,13 @@
 pub mod instructions;
 
-use bincode::{ serialize, deserialize };
-use std::vec::Vec;
-use std::fs::File;
-use std::fmt;
-use std::io::{ self, Write };
+use bincode::{deserialize, serialize};
 use constants_map::ConstantsMap;
+use std::{
+    fmt,
+    fs::File,
+    io::{self, Write},
+    vec::Vec,
+};
 
 /// A simpler representation of Lua
 #[derive(Serialize, Deserialize)]
@@ -14,7 +16,7 @@ pub struct LuaBytecode {
     ints: Vec<i64>,
     floats: Vec<f64>,
     strings: Vec<String>,
-    block: Vec<u32>
+    block: Vec<u32>,
 }
 
 impl LuaBytecode {
@@ -28,7 +30,7 @@ impl LuaBytecode {
             ints: const_map.get_ints(),
             floats: const_map.get_floats(),
             strings: const_map.get_strings(),
-            block: instrs
+            block: instrs,
         }
     }
 
@@ -93,14 +95,12 @@ impl fmt::Display for LuaBytecode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::remove_file;
-    use std::io::Read;
+    use std::{fs::remove_file, io::Read};
 
     fn setup() -> LuaBytecode {
         // x = 1 + 2 * 3 / 2 ^ 2.0 // 1 - 2
         let instrs = vec![
-            1, 273, 545, 8502, 321, 82, 21610, 25463,
-            129, 34713, 37028, 433, 47813, 3280
+            1, 273, 545, 8502, 321, 82, 21610, 25463, 129, 34713, 37028, 433, 47813, 3280,
         ];
         let mut const_map = ConstantsMap::new();
         for i in vec![1, 2, 3] {
@@ -124,7 +124,8 @@ mod tests {
     fn bytecode_serialize_deserialize() {
         let bc = setup();
         let name = "test_file.luabc";
-        bc.serialize_to_file(&name).expect("Failed to serialized to file.");
+        bc.serialize_to_file(&name)
+            .expect("Failed to serialized to file.");
         let mut file = File::open(&name).unwrap();
         let mut contents = vec![];
         file.read_to_end(&mut contents).unwrap();

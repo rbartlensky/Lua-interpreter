@@ -30,15 +30,15 @@ pub fn make_instr(opcode: Opcode, arg1: u8, arg2: u8, arg3: u8) -> u32 {
 /// There are 256 available registers, and load operations (LDI, LDF, LDS) can only
 /// refer to at most 256 constants.
 pub enum Opcode {
-    MOV =   0, // R(1) = R(2)
-    LDI =   1, // R(1) = I(1); load integer from the constant table
-    LDF =   2, // R(1) = F(1); load float from the constant table
-    LDS =   3, // R(1) = S(1); load string from the constant table
-    ADD =   4, // R(1) = R(2) + R(3)
-    SUB =   5, // R(1) = R(2) - R(3)
-    MUL =   6, // R(1) = R(2) * R(3)
-    DIV =   7, // R(1) = R(2) / R(3)
-    MOD =   8, // R(1) = R(2) % R(3)
-    FDIV =  9, // R(1) = R(2) // R(3)
-    EXP =  10  // R(1) = R(2) ^ R(3)
+    MOV = 0,  // R(1) = R(2)
+    LDI = 1,  // R(1) = I(1); load integer from the constant table
+    LDF = 2,  // R(1) = F(1); load float from the constant table
+    LDS = 3,  // R(1) = S(1); load string from the constant table
+    ADD = 4,  // R(1) = R(2) + R(3)
+    SUB = 5,  // R(1) = R(2) - R(3)
+    MUL = 6,  // R(1) = R(2) * R(3)
+    DIV = 7,  // R(1) = R(2) / R(3)
+    MOD = 8,  // R(1) = R(2) % R(3)
+    FDIV = 9, // R(1) = R(2) // R(3)
+    EXP = 10, // R(1) = R(2) ^ R(3)
 }
