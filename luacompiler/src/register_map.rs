@@ -1,18 +1,17 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 
 /// Represents a structure that is used to keep track of the mapping
 /// between Lua variables and register ids.
 pub struct RegisterMap {
     reg_count: RefCell<u8>,
-    reg_map: RefCell<HashMap<String, u8>>
+    reg_map: RefCell<HashMap<String, u8>>,
 }
 
 impl RegisterMap {
     pub fn new() -> RegisterMap {
         RegisterMap {
             reg_count: RefCell::new(0),
-            reg_map: RefCell::new(HashMap::new())
+            reg_map: RefCell::new(HashMap::new()),
         }
     }
 
@@ -29,7 +28,10 @@ impl RegisterMap {
     /// If the corresponding register is not found, a new register is created
     /// and returned.
     pub fn get_reg(&self, name: &str) -> u8 {
-        *self.reg_map.borrow_mut().entry(name.to_string())
+        *self
+            .reg_map
+            .borrow_mut()
+            .entry(name.to_string())
             .or_insert_with(|| self.new_reg())
     }
 
@@ -48,7 +50,7 @@ mod tests {
         let rm = RegisterMap::new();
         for i in 0..10 {
             assert_eq!(rm.new_reg(), i);
-            assert_eq!(*rm.reg_count.borrow(), i+1);
+            assert_eq!(*rm.reg_count.borrow(), i + 1);
         }
         assert_eq!(rm.reg_count(), 10);
     }

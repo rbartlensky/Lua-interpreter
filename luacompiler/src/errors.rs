@@ -1,5 +1,5 @@
-use std::io;
 use lrpar::{Node, ParseError};
+use std::io;
 
 type ParseErr = (Option<Node<u8>>, Vec<ParseError<u8>>);
 
@@ -7,7 +7,7 @@ type ParseErr = (Option<Node<u8>>, Vec<ParseError<u8>>);
 pub enum CliError {
     Io(io::Error),
     LexError(lrpar::LexParseError<u8>),
-    ParseError(ParseErr)
+    ParseError(ParseErr),
 }
 
 impl From<lrpar::LexParseError<u8>> for CliError {

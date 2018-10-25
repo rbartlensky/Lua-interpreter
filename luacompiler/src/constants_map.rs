@@ -11,7 +11,7 @@ use std::collections::HashMap;
 pub struct ConstantsMap {
     int_map: HashMap<i64, u8>,
     float_map: HashMap<String, u8>,
-    str_map: HashMap<String, u8>
+    str_map: HashMap<String, u8>,
 }
 
 impl ConstantsMap {
@@ -20,7 +20,7 @@ impl ConstantsMap {
         ConstantsMap {
             int_map: HashMap::new(),
             float_map: HashMap::new(),
-            str_map: HashMap::new()
+            str_map: HashMap::new(),
         }
     }
 
