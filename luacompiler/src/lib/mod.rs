@@ -9,6 +9,7 @@ extern crate serde_derive;
 extern crate bincode;
 
 pub mod bytecode;
+pub mod bytecodegen;
 pub mod errors;
 pub mod irgen;
 

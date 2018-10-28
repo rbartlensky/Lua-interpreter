@@ -76,6 +76,10 @@ impl<'a> RegisterMap<'a> {
     pub fn reg_count(self) -> usize {
         self.lifetimes.len()
     }
+
+    pub fn get_lifetimes(self) -> Vec<Lifetime> {
+        self.lifetimes
+    }
 }
 
 #[cfg(test)]
