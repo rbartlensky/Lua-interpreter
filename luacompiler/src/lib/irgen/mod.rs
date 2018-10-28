@@ -1,29 +1,31 @@
 pub mod constants_map;
+pub mod lua_ir;
 pub mod register_map;
-use self::{constants_map::ConstantsMap, register_map::RegisterMap};
-use bytecode::{
-    instructions::{HLInstr, Opcode},
-    LuaBytecode,
-};
+
+use self::{constants_map::ConstantsMap, lua_ir::LuaIR, register_map::RegisterMap};
+use bytecode::instructions::{HLInstr, Opcode};
 use cfgrammar::RIdx;
 use lrpar::Node::{self, *};
 use lua5_3_l;
 use lua5_3_y;
 use LuaParseTree;
 
-/// Represents a compiler which translates a given Lua parse tree to some bytecode representation.
-/// This compiler will be changed in the future to translate from lua to a higher-level
-/// representation, which is easier to translate to the current bytecode.
-pub struct LuaToBytecode<'a> {
+/// Compile the given parse tree into an SSA IR.
+pub fn compile_to_ir(pt: &LuaParseTree) -> LuaIR {
+    LuaToIR::new(pt).compile()
+}
+
+/// Represents a compiler which translates a given Lua parse tree to an SSA IR.
+struct LuaToIR<'a> {
     pt: &'a LuaParseTree,
     reg_map: RegisterMap<'a>,
     const_map: ConstantsMap,
     instrs: Vec<HLInstr>,
 }
 
-impl<'a> LuaToBytecode<'a> {
-    pub fn new(pt: &'a LuaParseTree) -> LuaToBytecode {
-        LuaToBytecode {
+impl<'a> LuaToIR<'a> {
+    fn new(pt: &'a LuaParseTree) -> LuaToIR {
+        LuaToIR {
             pt,
             reg_map: RegisterMap::new(),
             const_map: ConstantsMap::new(),
@@ -32,7 +34,7 @@ impl<'a> LuaToBytecode<'a> {
     }
 
     /// Compile the parse tree to an intermediate representation.
-    pub fn compile(mut self) -> LuaBytecode {
+    pub fn compile(mut self) -> LuaIR {
         let mut pt_nodes = vec![&self.pt.tree];
         while !pt_nodes.is_empty() {
             let node = pt_nodes.pop().unwrap();
@@ -63,16 +65,12 @@ impl<'a> LuaToBytecode<'a> {
                 }
             }
         }
-        LuaBytecode::new(
-            self.instrs.iter().map(|i| i.to_32bit()).collect(),
-            self.const_map,
-            self.reg_map.reg_count() as u8,
-        )
+        LuaIR::new(self.instrs, self.const_map, self.reg_map.get_lifetimes())
     }
 
     /// Jumps to the first child of <node> which denotes a variable name.
     fn compile_variable(&self, node: &Node<u8>) -> &'a str {
-        let name = LuaToBytecode::find_term(node, lua5_3_l::T_NAME);
+        let name = LuaToIR::find_term(node, lua5_3_l::T_NAME);
         match name {
             Some(Term { lexeme }) => self.pt.get_string(lexeme.start(), lexeme.end()),
             _ => {
