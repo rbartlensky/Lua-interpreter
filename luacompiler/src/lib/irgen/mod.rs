@@ -2,7 +2,7 @@ pub mod constants_map;
 pub mod register_map;
 use self::{constants_map::ConstantsMap, register_map::RegisterMap};
 use bytecode::{
-    instructions::{make_instr, Opcode},
+    instructions::{HLInstr, Opcode},
     LuaBytecode,
 };
 use cfgrammar::RIdx;
@@ -16,9 +16,9 @@ use LuaParseTree;
 /// representation, which is easier to translate to the current bytecode.
 pub struct LuaToBytecode<'a> {
     pt: &'a LuaParseTree,
-    reg_map: RegisterMap,
+    reg_map: RegisterMap<'a>,
     const_map: ConstantsMap,
-    instrs: Vec<u32>,
+    instrs: Vec<HLInstr>,
 }
 
 impl<'a> LuaToBytecode<'a> {
@@ -45,8 +45,10 @@ impl<'a> LuaToBytecode<'a> {
                     match nodes[1] {
                         Term { lexeme } if lexeme.tok_id() == lua5_3_l::T_EQ => {
                             let value = self.compile_expr(&nodes[2]);
-                            let reg = self.reg_map.get_reg(self.compile_variable(&nodes[0]));
-                            self.instrs.push(make_instr(Opcode::MOV, reg, value, 0));
+                            let name = self.compile_variable(&nodes[0]);
+                            let reg = self.reg_map.get_new_reg();
+                            self.reg_map.set_reg(name, reg);
+                            self.add_instr(HLInstr(Opcode::MOV, reg, value, 0));
                         }
                         _ => {}
                     }
@@ -61,11 +63,15 @@ impl<'a> LuaToBytecode<'a> {
                 }
             }
         }
-        LuaBytecode::new(self.instrs, self.const_map, self.reg_map.reg_count())
+        LuaBytecode::new(
+            self.instrs.iter().map(|i| i.to_32bit()).collect(),
+            self.const_map,
+            self.reg_map.reg_count() as u8,
+        )
     }
 
     /// Jumps to the first child of <node> which denotes a variable name.
-    fn compile_variable(&'a self, node: &Node<u8>) -> &'a str {
+    fn compile_variable(&self, node: &Node<u8>) -> &'a str {
         let name = LuaToBytecode::find_term(node, lua5_3_l::T_NAME);
         match name {
             Some(Term { lexeme }) => self.pt.get_string(lexeme.start(), lexeme.end()),
@@ -77,7 +83,7 @@ impl<'a> LuaToBytecode<'a> {
 
     /// Compile the expression rooted at <node>. Any instructions that are created are
     /// simply added to the bytecode that is being generated.
-    fn compile_expr(&mut self, node: &Node<u8>) -> u8 {
+    fn compile_expr(&mut self, node: &Node<u8>) -> usize {
         match *node {
             Nonterm {
                 ridx: RIdx(_ridx),
@@ -89,9 +95,9 @@ impl<'a> LuaToBytecode<'a> {
                     debug_assert!(nodes.len() == 3);
                     let left = self.compile_expr(&nodes[0]);
                     let right = self.compile_expr(&nodes[2]);
-                    let new_var = self.reg_map.new_reg();
+                    let new_var = self.reg_map.get_new_reg();
                     let instr = self.get_instr(&nodes[1], new_var, left, right);
-                    self.instrs.push(instr);
+                    self.add_instr(instr);
                     new_var
                 }
             }
@@ -99,22 +105,22 @@ impl<'a> LuaToBytecode<'a> {
                 let value = self.pt.get_string(lexeme.start(), lexeme.end());
                 match lexeme.tok_id() {
                     lua5_3_l::T_NUMERAL => {
-                        let reg = self.reg_map.new_reg();
+                        let reg = self.reg_map.get_new_reg();
                         if value.contains(".") {
                             let fl = self.const_map.get_float(value.to_string());
-                            self.instrs.push(make_instr(Opcode::LDF, reg, fl, 0));
+                            self.add_instr(HLInstr(Opcode::LDF, reg, fl, 0));
                         } else {
                             let int = self.const_map.get_int(value.parse().unwrap());
-                            self.instrs.push(make_instr(Opcode::LDI, reg, int, 0));
+                            self.add_instr(HLInstr(Opcode::LDI, reg, int, 0));
                         }
                         reg
                     }
                     lua5_3_l::T_SHORT_STR => {
-                        let reg = self.reg_map.new_reg();
+                        let reg = self.reg_map.get_new_reg();
                         let len = value.len();
                         // make sure that the quotes are not included!
                         let short_str = self.const_map.get_str(value[1..(len - 1)].to_string());
-                        self.instrs.push(make_instr(Opcode::LDS, reg, short_str, 0));
+                        self.add_instr(HLInstr(Opcode::LDS, reg, short_str, 0));
                         reg
                     }
                     _ => self.reg_map.get_reg(value),
@@ -124,7 +130,7 @@ impl<'a> LuaToBytecode<'a> {
     }
 
     /// Get the appropriate instruction for a given Node::Term.
-    fn get_instr(&self, node: &Node<u8>, reg: u8, lreg: u8, rreg: u8) -> u32 {
+    fn get_instr(&self, node: &Node<u8>, reg: usize, lreg: usize, rreg: usize) -> HLInstr {
         if let Term { lexeme } = node {
             let opcode = match lexeme.tok_id() {
                 lua5_3_l::T_PLUS => Opcode::ADD,
@@ -136,7 +142,7 @@ impl<'a> LuaToBytecode<'a> {
                 lua5_3_l::T_CARET => Opcode::EXP,
                 _ => unimplemented!("Instruction {}", lexeme.tok_id()),
             };
-            make_instr(opcode, reg, lreg, rreg)
+            HLInstr(opcode, reg, lreg, rreg)
         } else {
             panic!("Expected a Node::Term!");
         }
@@ -161,5 +167,12 @@ impl<'a> LuaToBytecode<'a> {
             }
         }
         None
+    }
+
+    /// Add the given instruction to the list of all instructions, and step register
+    /// lifetimes.
+    fn add_instr(&mut self, instr: HLInstr) {
+        self.instrs.push(instr);
+        self.reg_map.step();
     }
 }
