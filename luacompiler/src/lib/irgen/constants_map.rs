@@ -9,9 +9,9 @@ use std::collections::HashMap;
 /// For instance, if '1.0' is used in Lua, then an entry from 1.0 to 0 is created in the
 /// <float_map> member.
 pub struct ConstantsMap {
-    int_map: HashMap<i64, u8>,
-    float_map: HashMap<String, u8>,
-    str_map: HashMap<String, u8>,
+    int_map: HashMap<i64, usize>,
+    float_map: HashMap<String, usize>,
+    str_map: HashMap<String, usize>,
 }
 
 impl ConstantsMap {
@@ -25,8 +25,8 @@ impl ConstantsMap {
     }
 
     /// Get the corresponding index of the given integer in the constant table.
-    pub fn get_int(&mut self, int: i64) -> u8 {
-        let len = self.int_map.len() as u8;
+    pub fn get_int(&mut self, int: i64) -> usize {
+        let len = self.int_map.len();
         *self.int_map.entry(int).or_insert(len)
     }
 
@@ -41,8 +41,8 @@ impl ConstantsMap {
     }
 
     /// Get the corresponding index of the given float in the constant table.
-    pub fn get_float(&mut self, float: String) -> u8 {
-        let len = self.float_map.len() as u8;
+    pub fn get_float(&mut self, float: String) -> usize {
+        let len = self.float_map.len();
         *self.float_map.entry(float).or_insert(len)
     }
 
@@ -57,8 +57,8 @@ impl ConstantsMap {
     }
 
     /// Get the corresponding index of the given string in the constant table.
-    pub fn get_str(&mut self, string: String) -> u8 {
-        let len = self.str_map.len() as u8;
+    pub fn get_str(&mut self, string: String) -> usize {
+        let len = self.str_map.len();
         *self.str_map.entry(string).or_insert(len)
     }
 
