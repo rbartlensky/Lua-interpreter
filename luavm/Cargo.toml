@@ -1,0 +1,15 @@
+[package]
+name = "luavm"
+version = "0.1.0"
+authors = ["Robert Bartlensky <bartlensky.robert@gmail.com>"]
+
+[lib]
+name = "luavm"
+path = "src/lib/mod.rs"
+
+[dependencies]
+luacompiler = { path="../luacompiler" }
+
+[dependencies.clap]
+version = "2.32"
+default-features = false
