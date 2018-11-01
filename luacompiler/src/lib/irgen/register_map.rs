@@ -3,6 +3,7 @@ use std::{collections::HashMap, vec::Vec};
 /// Represents a tuple which is used to specify the lifetime of a register.
 /// For example if a register is first used by the 4th instruction of the bytecode, and
 /// used last by the 7th instruction, the register's lifetime would be (4, 8).
+#[derive(Eq, PartialEq, Clone, Debug)]
 pub struct Lifetime(usize, usize);
 
 impl Lifetime {
@@ -79,6 +80,10 @@ impl<'a> RegisterMap<'a> {
 
     pub fn get_lifetimes(self) -> Vec<Lifetime> {
         self.lifetimes
+    }
+
+    pub fn touch(&mut self, reg: usize) {
+        self.lifetimes[reg].1 = self.current_instr + 1;
     }
 }
 

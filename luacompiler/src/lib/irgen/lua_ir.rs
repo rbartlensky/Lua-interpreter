@@ -14,7 +14,7 @@ impl LuaIR {
         const_map: ConstantsMap,
         mut lifetimes: Vec<Lifetime>,
     ) -> LuaIR {
-        lifetimes.sort_by(|x, y| x.end_point().cmp(&y.end_point()));
+        lifetimes.sort_by(|x, y| x.start_point().cmp(&y.start_point()));
         LuaIR {
             instrs,
             const_map,

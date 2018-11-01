@@ -93,6 +93,8 @@ impl<'a> LuaToIR<'a> {
                     debug_assert!(nodes.len() == 3);
                     let left = self.compile_expr(&nodes[0]);
                     let right = self.compile_expr(&nodes[2]);
+                    self.reg_map.touch(left);
+                    self.reg_map.touch(right);
                     let new_var = self.reg_map.get_new_reg();
                     let instr = self.get_instr(&nodes[1], new_var, left, right);
                     self.add_instr(instr);

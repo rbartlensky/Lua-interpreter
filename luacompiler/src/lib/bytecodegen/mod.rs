@@ -1,3 +1,6 @@
+mod register_allocator;
+
+use self::register_allocator::LinearScan;
 use bytecode::LuaBytecode;
 use irgen::lua_ir::LuaIR;
 
@@ -16,6 +19,8 @@ impl LuaIRToLuaBc {
     }
 
     fn compile(self) -> LuaBytecode {
+        // println!("{:#?}", self.ir.instrs);
+        LinearScan::get_reg_allocation(2, &self.ir.lifetimes);
         LuaBytecode::new(
             self.ir.instrs.iter().map(|i| i.to_32bit()).collect(),
             self.ir.const_map,

@@ -28,6 +28,7 @@ pub fn make_instr(opcode: Opcode, arg1: u8, arg2: u8, arg3: u8) -> u32 {
 /// Represents a high level instruction whose operands have a size of usize.
 /// This is used by the frontend to create an SSA IR, which later gets translated
 /// into smaller instructions that fit in 32 bits.
+#[derive(Debug)]
 pub struct HLInstr(pub Opcode, pub usize, pub usize, pub usize);
 
 impl HLInstr {
@@ -43,7 +44,7 @@ impl HLInstr {
 /// Each operation can have at most 3 arguments.
 /// There are 256 available registers, and load operations (LDI, LDF, LDS) can only
 /// refer to at most 256 constants.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Opcode {
     MOV = 0,  // R(1) = R(2)
     LDI = 1,  // R(1) = I(1); load integer from the constant table
