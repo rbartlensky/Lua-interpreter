@@ -1,7 +1,7 @@
 pub mod instructions;
 
 use bincode::{deserialize, serialize};
-use constants_map::ConstantsMap;
+use irgen::constants_map::ConstantsMap;
 use std::{
     fmt,
     fs::File,
