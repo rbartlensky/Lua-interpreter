@@ -23,7 +23,7 @@ fn main() {
     let parse_tree = LuaParseTree::new(&file);
     match parse_tree {
         Ok(pt) => {
-            let bc = LuaToBytecode::new(&pt).compile_to_ir();
+            let bc = LuaToBytecode::new(&pt).compile();
             let mut vm = Vm::new(bc);
             vm.eval();
         }

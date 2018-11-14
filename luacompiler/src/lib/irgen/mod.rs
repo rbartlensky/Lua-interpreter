@@ -16,21 +16,26 @@ use LuaParseTree;
 /// representation, which is easier to translate to the current bytecode.
 pub struct LuaToBytecode<'a> {
     pt: &'a LuaParseTree,
+    reg_map: RegisterMap,
+    const_map: ConstantsMap,
+    instrs: Vec<u32>,
 }
 
 impl<'a> LuaToBytecode<'a> {
     pub fn new(pt: &'a LuaParseTree) -> LuaToBytecode {
-        LuaToBytecode { pt }
+        LuaToBytecode {
+            pt,
+            reg_map: RegisterMap::new(),
+            const_map: ConstantsMap::new(),
+            instrs: vec![],
+        }
     }
 
     /// Compile the parse tree to an intermediate representation.
-    pub fn compile_to_ir(&self) -> LuaBytecode {
-        let mut instrs = vec![];
-        let mut pt_nodes: Vec<&Node<u8>> = vec![&self.pt.tree];
-        let mut reg_map = RegisterMap::new();
-        let mut const_map = ConstantsMap::new();
+    pub fn compile(mut self) -> LuaBytecode {
+        let mut pt_nodes = vec![&self.pt.tree];
         while !pt_nodes.is_empty() {
-            let node = pt_nodes.pop().unwrap(); // always checked if it is empty
+            let node = pt_nodes.pop().unwrap();
             match *node {
                 Nonterm {
                     ridx: RIdx(ridx),
@@ -39,15 +44,9 @@ impl<'a> LuaToBytecode<'a> {
                     debug_assert!(nodes.len() == 3);
                     match nodes[1] {
                         Term { lexeme } if lexeme.tok_id() == lua5_3_l::T_EQ => {
-                            let id = self.compile_variable(&nodes[0]);
-                            let value = self.compile_expr(
-                                &nodes[2],
-                                &mut instrs,
-                                &mut reg_map,
-                                &mut const_map,
-                            );
-                            let reg = reg_map.get_reg(&id);
-                            instrs.push(make_instr(Opcode::MOV, reg, value, 0));
+                            let value = self.compile_expr(&nodes[2]);
+                            let reg = self.reg_map.get_reg(self.compile_variable(&nodes[0]));
+                            self.instrs.push(make_instr(Opcode::MOV, reg, value, 0));
                         }
                         _ => {}
                     }
@@ -62,7 +61,7 @@ impl<'a> LuaToBytecode<'a> {
                 }
             }
         }
-        LuaBytecode::new(instrs, const_map, reg_map.reg_count())
+        LuaBytecode::new(self.instrs, self.const_map, self.reg_map.reg_count())
     }
 
     /// Jumps to the first child of <node> which denotes a variable name.
@@ -78,26 +77,21 @@ impl<'a> LuaToBytecode<'a> {
 
     /// Compile the expression rooted at <node>. Any instructions that are created are
     /// simply added to the bytecode that is being generated.
-    fn compile_expr(
-        &self,
-        node: &Node<u8>,
-        instrs: &mut Vec<u32>,
-        reg_map: &mut RegisterMap,
-        const_map: &mut ConstantsMap,
-    ) -> u8 {
+    fn compile_expr(&mut self, node: &Node<u8>) -> u8 {
         match *node {
             Nonterm {
                 ridx: RIdx(_ridx),
                 ref nodes,
             } => {
                 if nodes.len() == 1 {
-                    self.compile_expr(&nodes[0], instrs, reg_map, const_map)
+                    self.compile_expr(&nodes[0])
                 } else {
-                    assert!(nodes.len() == 3);
-                    let left = self.compile_expr(&nodes[0], instrs, reg_map, const_map);
-                    let right = self.compile_expr(&nodes[2], instrs, reg_map, const_map);
-                    let new_var = reg_map.new_reg();
-                    instrs.push(self.get_instr(&nodes[1], new_var, left, right));
+                    debug_assert!(nodes.len() == 3);
+                    let left = self.compile_expr(&nodes[0]);
+                    let right = self.compile_expr(&nodes[2]);
+                    let new_var = self.reg_map.new_reg();
+                    let instr = self.get_instr(&nodes[1], new_var, left, right);
+                    self.instrs.push(instr);
                     new_var
                 }
             }
@@ -105,25 +99,25 @@ impl<'a> LuaToBytecode<'a> {
                 let value = self.pt.get_string(lexeme.start(), lexeme.end());
                 match lexeme.tok_id() {
                     lua5_3_l::T_NUMERAL => {
-                        let reg = reg_map.new_reg();
+                        let reg = self.reg_map.new_reg();
                         if value.contains(".") {
-                            let fl = const_map.get_float(value.to_string());
-                            instrs.push(make_instr(Opcode::LDF, reg, fl, 0));
+                            let fl = self.const_map.get_float(value.to_string());
+                            self.instrs.push(make_instr(Opcode::LDF, reg, fl, 0));
                         } else {
-                            let int = const_map.get_int(value.parse().unwrap());
-                            instrs.push(make_instr(Opcode::LDI, reg, int, 0));
+                            let int = self.const_map.get_int(value.parse().unwrap());
+                            self.instrs.push(make_instr(Opcode::LDI, reg, int, 0));
                         }
                         reg
                     }
                     lua5_3_l::T_SHORT_STR => {
-                        let reg = reg_map.new_reg();
+                        let reg = self.reg_map.new_reg();
                         let len = value.len();
                         // make sure that the quotes are not included!
-                        let short_str = const_map.get_str(value[1..(len - 1)].to_string());
-                        instrs.push(make_instr(Opcode::LDS, reg, short_str, 0));
+                        let short_str = self.const_map.get_str(value[1..(len - 1)].to_string());
+                        self.instrs.push(make_instr(Opcode::LDS, reg, short_str, 0));
                         reg
                     }
-                    _ => reg_map.get_reg(value),
+                    _ => self.reg_map.get_reg(value),
                 }
             }
         }
@@ -162,9 +156,6 @@ impl<'a> LuaToBytecode<'a> {
                 Term { lexeme } => {
                     if lexeme.tok_id() == id {
                         return Some(node);
-                    } else {
-                        // continue the dfs
-                        continue;
                     }
                 }
             }
