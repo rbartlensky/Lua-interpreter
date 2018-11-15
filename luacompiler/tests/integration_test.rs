@@ -2,13 +2,14 @@ extern crate luacompiler;
 
 use luacompiler::{
     bytecode::instructions::{make_instr, Opcode},
+    irgen::LuaToBytecode,
     LuaParseTree,
 };
 
 #[test]
 fn ldi_generation() {
-    let pt = LuaParseTree::from_str(String::from("x = 1"));
-    let bc = pt.unwrap().compile_to_ir();
+    let pt = LuaParseTree::from_str(String::from("x = 1")).unwrap();
+    let bc = LuaToBytecode::new(&pt).compile();
     assert_eq!(bc.instrs_len(), 2);
     assert_eq!(bc.reg_count(), 2);
     assert_eq!(bc.get_int(0), 1);
@@ -18,8 +19,8 @@ fn ldi_generation() {
 
 #[test]
 fn ldf_generation() {
-    let pt = LuaParseTree::from_str(String::from("x = 2.0"));
-    let bc = pt.unwrap().compile_to_ir();
+    let pt = LuaParseTree::from_str(String::from("x = 2.0")).unwrap();
+    let bc = LuaToBytecode::new(&pt).compile();
     assert_eq!(bc.instrs_len(), 2);
     assert_eq!(bc.reg_count(), 2);
     assert_eq!(bc.get_float(0).to_string(), "2");
@@ -29,8 +30,8 @@ fn ldf_generation() {
 
 #[test]
 fn lds_generation() {
-    let pt = LuaParseTree::from_str(String::from("x = \"1.2\""));
-    let bc = pt.unwrap().compile_to_ir();
+    let pt = LuaParseTree::from_str(String::from("x = \"1.2\"")).unwrap();
+    let bc = LuaToBytecode::new(&pt).compile();
     assert_eq!(bc.instrs_len(), 2);
     assert_eq!(bc.reg_count(), 2);
     assert_eq!(bc.get_string(0), "1.2");
@@ -39,8 +40,8 @@ fn lds_generation() {
 }
 
 fn assert_bytecode(opcode: Opcode, operation: &str) {
-    let pt = LuaParseTree::from_str(String::from(format!("x = 1 {} 2", operation)));
-    let bc = pt.unwrap().compile_to_ir();
+    let pt = LuaParseTree::from_str(String::from(format!("x = 1 {} 2", operation))).unwrap();
+    let bc = LuaToBytecode::new(&pt).compile();
     assert_eq!(bc.instrs_len(), 4);
     assert_eq!(bc.reg_count(), 4);
     assert_eq!(bc.get_int(0), 1);

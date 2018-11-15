@@ -10,7 +10,7 @@ name = "luacompiler"
 
 [lib]
 name = "luacompiler"
-path = "src/lib.rs"
+path = "src/lib/mod.rs"
 
 [dependencies]
 cfgrammar = { git="https://github.com/softdevteam/grmtools" }
