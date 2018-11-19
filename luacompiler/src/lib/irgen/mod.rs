@@ -77,7 +77,9 @@ impl<'a> LuaToIR<'a> {
     fn compile_variable(&self, node: &Node<u8>) -> &'a str {
         let name = LuaToIR::find_term(node, lua5_3_l::T_NAME);
         match name {
-            Some(Term { lexeme }) => self.pt.get_string(lexeme.start(), lexeme.end()),
+            Some(Term { lexeme }) => self
+                .pt
+                .get_string(lexeme.start(), lexeme.end().unwrap_or(lexeme.start())),
             _ => {
                 panic!("Must have assignments of form: var = expr!");
             }
@@ -105,7 +107,9 @@ impl<'a> LuaToIR<'a> {
                 }
             }
             Term { lexeme } => {
-                let value = self.pt.get_string(lexeme.start(), lexeme.end());
+                let value = self
+                    .pt
+                    .get_string(lexeme.start(), lexeme.end().unwrap_or(lexeme.start()));
                 match lexeme.tok_id() {
                     lua5_3_l::T_NUMERAL => {
                         let reg = self.reg_map.get_new_reg();
