@@ -62,3 +62,25 @@ impl LuaObj for LuaFloat {
         Ok(self.v)
     }
 }
+
+pub struct LuaString {
+    pub v: String,
+}
+
+impl LuaObj for LuaString {
+    fn clone_box(&self) -> Box<LuaObj> {
+        Box::new(LuaString { v: self.v.clone() })
+    }
+
+    fn is_float(&self) -> bool {
+        true
+    }
+
+    fn to_int(&self) -> Result<i64, LuaError> {
+        self.v.parse().map_err(|_| LuaError::IntConversionErr)
+    }
+
+    fn to_float(&self) -> Result<f64, LuaError> {
+        self.v.parse().map_err(|_| LuaError::FloatConversionErr)
+    }
+}

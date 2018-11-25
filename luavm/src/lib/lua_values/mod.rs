@@ -185,6 +185,15 @@ impl From<f64> for LuaVal {
     }
 }
 
+impl From<String> for LuaVal {
+    /// Create a float LuaVal.
+    fn from(string: String) -> Self {
+        LuaVal {
+            val: LuaValKind::BOXED ^ to_boxed(Box::new(LuaString { v: string })),
+        }
+    }
+}
+
 impl From<LuaTable> for LuaVal {
     /// Create a table LuaVal.
     fn from(table: LuaTable) -> Self {
@@ -306,6 +315,19 @@ mod tests {
     }
 
     #[test]
+    fn luastring_type() {
+        let mut main = LuaVal::from(String::from("1"));
+        assert_eq!(main.kind(), LuaValKind::BOXED);
+        assert_eq!(main.is_float(), true);
+        assert_eq!(main.to_int().unwrap(), 1);
+        assert_float_absolute_eq!(main.to_float().unwrap(), 1.0, 0.1);
+        test_get_and_set_attr_errors(&mut main);
+        let main_clone = main.clone();
+        assert_ne!(main_clone.val, main.val);
+        assert_eq!(main_clone.kind(), main.kind());
+    }
+
+    #[test]
     fn table_type() {
         let mut hm = HashMap::new();
         hm.insert(String::from("bar"), LuaVal::from(2));
@@ -333,6 +355,7 @@ mod tests {
             LuaVal::from(1),
             LuaVal::from(3.0),
             LuaVal::from(LuaTable::new(HashMap::new())),
+            LuaVal::from(String::from("3.0")),
         ]
     }
 
@@ -354,12 +377,32 @@ mod tests {
         let val = types[1].add(&types[2]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 4.0, 0.1);
+        // int + string
+        let val = types[1].add(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 4.0, 0.1);
         // float + int
         let val = types[2].add(&types[1]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 4.0, 0.1);
         // float + float
         let val = types[2].add(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 6.0, 0.1);
+        // float + string
+        let val = types[2].add(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 6.0, 0.1);
+        // string + int
+        let val = types[4].add(&types[1]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 4.0, 0.1);
+        // string + float
+        let val = types[4].add(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 6.0, 0.1);
+        // string + string
+        let val = types[4].add(&types[4]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 6.0, 0.1);
     }
@@ -382,12 +425,32 @@ mod tests {
         let val = types[1].sub(&types[2]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), -2.0, 0.1);
+        // int - string
+        let val = types[1].sub(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), -2.0, 0.1);
         // float - int
         let val = types[2].sub(&types[1]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 2.0, 0.1);
         // float - float
         let val = types[2].sub(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
+        // float - string
+        let val = types[2].sub(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
+        // string - int
+        let val = types[4].sub(&types[1]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 2.0, 0.1);
+        // string - float
+        let val = types[4].sub(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
+        // string - string
+        let val = types[4].sub(&types[4]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
     }
@@ -410,12 +473,32 @@ mod tests {
         let val = types[1].mul(&types[2]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 3.0, 0.1);
+        // int * string
+        let val = types[1].mul(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 3.0, 0.1);
         // float * int
         let val = types[2].mul(&types[1]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 3.0, 0.1);
         // float * float
         let val = types[2].mul(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 9.0, 0.1);
+        // float * string
+        let val = types[2].mul(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 9.0, 0.1);
+        // string * int
+        let val = types[4].mul(&types[1]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 3.0, 0.1);
+        // string * float
+        let val = types[4].mul(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 9.0, 0.1);
+        // string * string
+        let val = types[4].mul(&types[4]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 9.0, 0.1);
     }
@@ -438,12 +521,32 @@ mod tests {
         let val = types[1].div(&types[2]).unwrap();
         assert_eq!(val.kind(), LuaValKind::BOXED);
         assert_float_absolute_eq!(val.to_float().unwrap(), 0.3, 0.1);
+        // int / string
+        let val = types[1].div(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::BOXED);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 0.3, 0.1);
         // float / int
         let val = types[2].div(&types[1]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 3.0, 0.1);
         // float / float
         let val = types[2].div(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
+        // float / string
+        let val = types[2].div(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
+        // string / int
+        let val = types[4].div(&types[1]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 3.0, 0.1);
+        // string / float
+        let val = types[4].div(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
+        // string / string
+        let val = types[4].div(&types[4]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
     }
@@ -466,12 +569,32 @@ mod tests {
         let val = types[1].modulus(&types[2]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
+        // int % string
+        let val = types[1].modulus(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
         // float % int
         let val = types[2].modulus(&types[1]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
         // float % float
         let val = types[2].modulus(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
+        // float % string
+        let val = types[2].modulus(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
+        // string % int
+        let val = types[4].modulus(&types[1]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
+        // string % float
+        let val = types[4].modulus(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
+        // string % string
+        let val = types[4].modulus(&types[4]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
     }
@@ -494,12 +617,32 @@ mod tests {
         let val = types[1].fdiv(&types[2]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
+        // int // string
+        let val = types[1].fdiv(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 0.0, 0.1);
         // float // int
         let val = types[2].fdiv(&types[1]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 3.0, 0.1);
         // float // float
         let val = types[2].fdiv(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
+        // float // string
+        let val = types[2].fdiv(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
+        // string // int
+        let val = types[4].fdiv(&types[1]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 3.0, 0.1);
+        // string // float
+        let val = types[4].fdiv(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
+        // string // string
+        let val = types[4].fdiv(&types[4]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
     }
@@ -522,12 +665,32 @@ mod tests {
         let val = types[1].exp(&types[2]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
+        // int ^ string
+        let val = types[1].exp(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 1.0, 0.1);
         // float ^ int
         let val = types[2].exp(&types[1]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 3.0, 0.1);
         // float ^ float
         let val = types[2].exp(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 27.0, 0.1);
+        // float ^ string
+        let val = types[2].exp(&types[4]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 27.0, 0.1);
+        // string ^ int
+        let val = types[4].exp(&types[1]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 3.0, 0.1);
+        // string ^ float
+        let val = types[4].exp(&types[2]).unwrap();
+        assert_eq!(val.kind(), LuaValKind::FLOAT);
+        assert_float_absolute_eq!(val.to_float().unwrap(), 27.0, 0.1);
+        // string ^ string
+        let val = types[4].exp(&types[4]).unwrap();
         assert_eq!(val.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(val.to_float().unwrap(), 27.0, 0.1);
     }
