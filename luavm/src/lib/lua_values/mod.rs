@@ -39,6 +39,21 @@ impl LuaVal {
         (LuaValKind::BOXED ^ self.val) as *mut Box<LuaObj>
     }
 
+    fn is_number(&self) -> bool {
+        match self.kind() {
+            LuaValKind::INT | LuaValKind::FLOAT => true,
+            LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_number() },
+            _ => false,
+        }
+    }
+
+    fn is_string(&self) -> bool {
+        match self.kind() {
+            LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_string() },
+            _ => false,
+        }
+    }
+
     /// Returns true if this value can be considered a float, or false otherwise.
     /// This method is only used in arithmetic operations.
     fn is_float(&self) -> bool {
@@ -72,6 +87,18 @@ impl LuaVal {
                 LuaValKind::BOXED => (*self.as_boxed()).to_int(),
                 _ => Err(LuaError::IntConversionErr),
             }
+        }
+    }
+
+    /// Attempts to convert this value to a string.
+    pub fn to_string(&self) -> Result<String, LuaError> {
+        match self.kind() {
+            LuaValKind::INT => Ok(((self.val >> tagging::TAG_SHIFT) as i64).to_string()),
+            LuaValKind::FLOAT => {
+                Ok((unsafe { transmute::<usize, f64>(LuaValKind::FLOAT ^ self.val) }).to_string())
+            }
+            LuaValKind::BOXED => unsafe { (*self.as_boxed()).to_string() },
+            _ => Err(LuaError::StringConversionErr),
         }
     }
 
@@ -154,6 +181,25 @@ impl LuaVal {
         Ok(LuaVal::from(self.to_float()?.powf(other.to_float()?)))
     }
 }
+
+impl PartialEq for LuaVal {
+    fn eq(&self, other: &LuaVal) -> bool {
+        if self.is_number() && other.is_number() {
+            return self.to_float().unwrap() == other.to_float().unwrap();
+        } else if self.is_string() && other.is_string() {
+            return self.to_string().unwrap() == other.to_string().unwrap();
+        } else if self.kind() == other.kind() {
+            if self.kind() == LuaValKind::NIL {
+                return true;
+            } else if self.kind() == LuaValKind::TABLE {
+                return unsafe { (*table_ptr(self.val)).same_ptr(&*table_ptr(other.val)) };
+            }
+        }
+        false
+    }
+}
+
+impl Eq for LuaVal {}
 
 impl From<i64> for LuaVal {
     /// Create an integer LuaVal.
@@ -742,5 +788,66 @@ mod tests {
         let float2 = float.clone();
         float.set(LuaVal::from(2.0));
         assert_ne!(float.to_float().unwrap(), float2.to_float().unwrap());
+    }
+
+    fn get_eq_types() -> Vec<LuaVal> {
+        vec![
+            LuaVal::from(1),
+            LuaVal::from(1.0),
+            LuaVal::from(String::from("1.0")),
+            LuaVal::from(LuaTable::new(HashMap::new())),
+        ]
+    }
+
+    #[test]
+    fn eq_for_ints() {
+        let types = get_eq_types();
+        let int = LuaVal::from(1);
+        assert_eq!(int, types[0]);
+        assert_eq!(int, types[1]);
+        assert_ne!(int, types[2]);
+        assert_ne!(int, types[3]);
+        let int = LuaVal::from(2);
+        for i in 0..4 {
+            assert_ne!(int, types[i]);
+        }
+    }
+
+    #[test]
+    fn eq_for_floats() {
+        let types = get_eq_types();
+        let float = LuaVal::from(1.0);
+        assert_eq!(float, types[0]);
+        assert_eq!(float, types[1]);
+        assert_ne!(float, types[2]);
+        assert_ne!(float, types[3]);
+        let float = LuaVal::from(2.0);
+        for i in 0..4 {
+            assert_ne!(float, types[i]);
+        }
+    }
+
+    #[test]
+    fn eq_for_tables() {
+        let types = get_eq_types();
+        let table = LuaVal::from(LuaTable::new(HashMap::new()));
+        assert_eq!(table, table);
+        for i in 0..4 {
+            assert_ne!(table, types[i]);
+        }
+    }
+
+    #[test]
+    fn eq_for_strings() {
+        let types = get_eq_types();
+        let string = LuaVal::from(String::from("1.0"));
+        assert_ne!(string, types[0]);
+        assert_ne!(string, types[1]);
+        assert_eq!(string, types[2]);
+        assert_ne!(string, types[3]);
+        let string = LuaVal::from(String::from("2.0"));
+        for i in 0..4 {
+            assert_ne!(string, types[i]);
+        }
     }
 }

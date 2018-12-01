@@ -4,12 +4,19 @@ use errors::LuaError;
 pub trait LuaObj {
     /// Clones the underlying type, and returns a box of it.
     fn clone_box(&self) -> Box<LuaObj>;
-    /// Checks whether the underlyning type is a float or not.
+    /// Checks whther the underlying type is a float or an int.
+    fn is_number(&self) -> bool;
+    /// Checks whether the underlying type is converted to a float when processed in
+    /// arithmetic expressions.
     fn is_float(&self) -> bool;
+    /// Checks whether the underlying type is a string or not.
+    fn is_string(&self) -> bool;
     /// Converts the underlying type to an int.
     fn to_int(&self) -> Result<i64, LuaError>;
     /// Converts the underlying type to a float.
     fn to_float(&self) -> Result<f64, LuaError>;
+    /// Converts the underlying type to a string.
+    fn to_string(&self) -> Result<String, LuaError>;
 }
 
 /// Boxes the given `LuaObj`, and returns the address of the box.
@@ -32,12 +39,24 @@ impl LuaObj for LuaInt {
         Ok(self.v)
     }
 
+    fn is_number(&self) -> bool {
+        true
+    }
+
     fn is_float(&self) -> bool {
+        false
+    }
+
+    fn is_string(&self) -> bool {
         false
     }
 
     fn to_float(&self) -> Result<f64, LuaError> {
         Ok(self.v as f64)
+    }
+
+    fn to_string(&self) -> Result<String, LuaError> {
+        Ok(self.v.to_string())
     }
 }
 
@@ -50,8 +69,16 @@ impl LuaObj for LuaFloat {
         Box::new(LuaFloat { v: self.v })
     }
 
+    fn is_number(&self) -> bool {
+        true
+    }
+
     fn is_float(&self) -> bool {
         true
+    }
+
+    fn is_string(&self) -> bool {
+        false
     }
 
     fn to_int(&self) -> Result<i64, LuaError> {
@@ -60,6 +87,10 @@ impl LuaObj for LuaFloat {
 
     fn to_float(&self) -> Result<f64, LuaError> {
         Ok(self.v)
+    }
+
+    fn to_string(&self) -> Result<String, LuaError> {
+        Ok(self.v.to_string())
     }
 }
 
@@ -72,7 +103,15 @@ impl LuaObj for LuaString {
         Box::new(LuaString { v: self.v.clone() })
     }
 
+    fn is_number(&self) -> bool {
+        false
+    }
+
     fn is_float(&self) -> bool {
+        true
+    }
+
+    fn is_string(&self) -> bool {
         true
     }
 
@@ -82,5 +121,9 @@ impl LuaObj for LuaString {
 
     fn to_float(&self) -> Result<f64, LuaError> {
         self.v.parse().map_err(|_| LuaError::FloatConversionErr)
+    }
+
+    fn to_string(&self) -> Result<String, LuaError> {
+        Ok(self.v.clone())
     }
 }
