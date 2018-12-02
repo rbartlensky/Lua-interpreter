@@ -5,7 +5,10 @@ mod tagging;
 use self::{lua_obj::*, lua_table::LuaTable, tagging::*};
 use errors::LuaError;
 use gc::{Finalize, Gc, Trace};
-use std::mem::{swap, transmute};
+use std::{
+    hash::{Hash, Hasher},
+    mem::transmute,
+};
 
 /// Represents a value in Lua.
 #[derive(Debug)]
@@ -54,12 +57,13 @@ impl LuaVal {
         }
     }
 
-    /// Returns true if this value can be considered a float, or false otherwise.
-    /// This method is only used in arithmetic operations.
-    fn is_float(&self) -> bool {
+    /// Returns true if the underlying type is either a float or a string.
+    /// In Lua, if either of these two types are used in an arithmetic
+    /// expression, then both arguments are converted to floats.
+    fn is_aop_float(&self) -> bool {
         match self.kind() {
             LuaValKind::FLOAT => true,
-            LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_float() },
+            LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_aop_float() },
             _ => false,
         }
     }
@@ -102,18 +106,18 @@ impl LuaVal {
         }
     }
 
-    /// Sets this to a new value.
-    pub fn set(&mut self, mut val: LuaVal) {
-        // exchange the pointers so that when `val` goes out of scope the old value
-        // is released and not leaked
-        swap(&mut self.val, &mut val.val);
+    fn get_string_ref(&self) -> Option<&str> {
+        match self.kind() {
+            LuaValKind::BOXED => unsafe { (*self.as_boxed()).get_string_ref() },
+            _ => None,
+        }
     }
 
     /// Sets the given attribute to a given value.
-    pub fn set_attr(&mut self, attr: &str, val: LuaVal) -> Result<(), LuaError> {
+    pub fn set_attr(&mut self, attr: LuaVal, val: LuaVal) -> Result<(), LuaError> {
         if let LuaValKind::TABLE = self.kind() {
             Ok(unsafe {
-                (*table_ptr(self.val)).set(attr, val);
+                (*table_ptr(self.val)).set_attr(attr, val);
             })
         } else {
             Err(LuaError::SetAttrErr)
@@ -121,7 +125,7 @@ impl LuaVal {
     }
 
     /// Gets the value of the given attribute.
-    pub fn get_attr(&self, attr: &str) -> Result<LuaVal, LuaError> {
+    pub fn get_attr(&self, attr: &LuaVal) -> Result<LuaVal, LuaError> {
         if let LuaValKind::TABLE = self.kind() {
             Ok(unsafe { (*table_ptr(self.val)).get_attr(attr) })
         } else {
@@ -130,7 +134,7 @@ impl LuaVal {
     }
 
     pub fn add(&self, other: &LuaVal) -> Result<LuaVal, LuaError> {
-        Ok(if self.is_float() || other.is_float() {
+        Ok(if self.is_aop_float() || other.is_aop_float() {
             LuaVal::from(self.to_float()? + other.to_float()?)
         } else {
             LuaVal::from(self.to_int()? + other.to_int()?)
@@ -138,7 +142,7 @@ impl LuaVal {
     }
 
     pub fn sub(&self, other: &LuaVal) -> Result<LuaVal, LuaError> {
-        Ok(if self.is_float() || other.is_float() {
+        Ok(if self.is_aop_float() || other.is_aop_float() {
             LuaVal::from(self.to_float()? - other.to_float()?)
         } else {
             LuaVal::from(self.to_int()? - other.to_int()?)
@@ -146,7 +150,7 @@ impl LuaVal {
     }
 
     pub fn mul(&self, other: &LuaVal) -> Result<LuaVal, LuaError> {
-        Ok(if self.is_float() || other.is_float() {
+        Ok(if self.is_aop_float() || other.is_aop_float() {
             LuaVal::from(self.to_float()? * other.to_float()?)
         } else {
             LuaVal::from(self.to_int()? * other.to_int()?)
@@ -154,7 +158,7 @@ impl LuaVal {
     }
 
     pub fn div(&self, other: &LuaVal) -> Result<LuaVal, LuaError> {
-        Ok(if self.is_float() || other.is_float() {
+        Ok(if self.is_aop_float() || other.is_aop_float() {
             LuaVal::from(self.to_float()? / other.to_float()?)
         } else {
             LuaVal::from(self.to_int()? / other.to_int()?)
@@ -162,7 +166,7 @@ impl LuaVal {
     }
 
     pub fn modulus(&self, other: &LuaVal) -> Result<LuaVal, LuaError> {
-        Ok(if self.is_float() || other.is_float() {
+        Ok(if self.is_aop_float() || other.is_aop_float() {
             LuaVal::from(self.to_float()? % other.to_float()?)
         } else {
             LuaVal::from(self.to_int()? % other.to_int()?)
@@ -170,7 +174,7 @@ impl LuaVal {
     }
 
     pub fn fdiv(&self, other: &LuaVal) -> Result<LuaVal, LuaError> {
-        Ok(if self.is_float() || other.is_float() {
+        Ok(if self.is_aop_float() || other.is_aop_float() {
             LuaVal::from((self.to_float()? / other.to_float()?).floor())
         } else {
             LuaVal::from(self.to_int()? / other.to_int()?)
@@ -187,7 +191,7 @@ impl PartialEq for LuaVal {
         if self.is_number() && other.is_number() {
             return self.to_float().unwrap() == other.to_float().unwrap();
         } else if self.is_string() && other.is_string() {
-            return self.to_string().unwrap() == other.to_string().unwrap();
+            return self.get_string_ref().unwrap() == other.get_string_ref().unwrap();
         } else if self.kind() == other.kind() {
             if self.kind() == LuaValKind::NIL {
                 return true;
@@ -200,6 +204,31 @@ impl PartialEq for LuaVal {
 }
 
 impl Eq for LuaVal {}
+
+impl Hash for LuaVal {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self.kind() {
+            LuaValKind::INT | LuaValKind::FLOAT | LuaValKind::NIL | LuaValKind::TABLE => {
+                self.val.hash(state)
+            }
+            LuaValKind::BOXED => {
+                let val = unsafe { &*self.as_boxed() };
+                if val.is_string() {
+                    val.get_string_ref().unwrap().hash(state)
+                } else if val.is_aop_float() {
+                    let f = val.to_float().unwrap();
+                    // NaN or Infs cannot be hashed, and Lua doesn't handle them either
+                    if f.is_nan() || f.is_infinite() {
+                        panic!("Tried to hash NaN or Inf")
+                    }
+                    unsafe { transmute::<f64, u64>(f) }.hash(state)
+                } else {
+                    val.to_int().unwrap().hash(state)
+                }
+            }
+        }
+    }
+}
 
 impl From<i64> for LuaVal {
     /// Create an integer LuaVal.
@@ -286,9 +315,14 @@ mod tests {
     use std::{collections::HashMap, vec::Vec};
 
     fn test_get_and_set_attr_errors(main: &mut LuaVal) {
-        assert_eq!(main.get_attr("foo").unwrap_err(), LuaError::GetAttrErr);
         assert_eq!(
-            main.set_attr("foo", LuaVal::new()).unwrap_err(),
+            main.get_attr(&LuaVal::from(String::from("foo")))
+                .unwrap_err(),
+            LuaError::GetAttrErr
+        );
+        assert_eq!(
+            main.set_attr(LuaVal::from(String::from("foo")), LuaVal::new())
+                .unwrap_err(),
             LuaError::SetAttrErr
         );
     }
@@ -297,7 +331,7 @@ mod tests {
     fn nil_type() {
         let mut main = LuaVal::new();
         assert_eq!(main.kind(), LuaValKind::NIL);
-        assert_eq!(main.is_float(), false);
+        assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
         assert_eq!(main.to_float().unwrap_err(), LuaError::FloatConversionErr);
         test_get_and_set_attr_errors(&mut main);
@@ -310,7 +344,7 @@ mod tests {
     fn int_type() {
         let mut main = LuaVal::from(1);
         assert_eq!(main.kind(), LuaValKind::INT);
-        assert_eq!(main.is_float(), false);
+        assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap(), 1);
         assert_float_absolute_eq!(main.to_float().unwrap(), 1.0, 0.1);
         test_get_and_set_attr_errors(&mut main);
@@ -324,7 +358,7 @@ mod tests {
         let val = 2_i64.pow(62);
         let mut main = LuaVal::from(val);
         assert_eq!(main.kind(), LuaValKind::BOXED);
-        assert_eq!(main.is_float(), false);
+        assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap(), val);
         assert_float_absolute_eq!(main.to_float().unwrap(), 2.0_f64.powf(62.0), 0.1);
         test_get_and_set_attr_errors(&mut main);
@@ -338,7 +372,7 @@ mod tests {
         let float_to_test = unsafe { transmute::<u64, f64>(2_u64.pow(61) - 1) };
         let mut main = LuaVal::from(float_to_test);
         assert_eq!(main.kind(), LuaValKind::BOXED);
-        assert_eq!(main.is_float(), true);
+        assert_eq!(main.is_aop_float(), true);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
         assert_float_absolute_eq!(main.to_float().unwrap(), float_to_test, 0.00000000001);
         test_get_and_set_attr_errors(&mut main);
@@ -351,7 +385,7 @@ mod tests {
     fn luafloat_type() {
         let mut main = LuaVal::from(1.0);
         assert_eq!(main.kind(), LuaValKind::FLOAT);
-        assert_eq!(main.is_float(), true);
+        assert_eq!(main.is_aop_float(), true);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
         assert_float_absolute_eq!(main.to_float().unwrap(), 1.0, 0.1);
         test_get_and_set_attr_errors(&mut main);
@@ -364,7 +398,7 @@ mod tests {
     fn luastring_type() {
         let mut main = LuaVal::from(String::from("1"));
         assert_eq!(main.kind(), LuaValKind::BOXED);
-        assert_eq!(main.is_float(), true);
+        assert_eq!(main.is_aop_float(), true);
         assert_eq!(main.to_int().unwrap(), 1);
         assert_float_absolute_eq!(main.to_float().unwrap(), 1.0, 0.1);
         test_get_and_set_attr_errors(&mut main);
@@ -376,21 +410,27 @@ mod tests {
     #[test]
     fn table_type() {
         let mut hm = HashMap::new();
-        hm.insert(String::from("bar"), LuaVal::from(2));
+        hm.insert(LuaVal::from(String::from("bar")), LuaVal::from(2));
         let mut main = LuaVal::from(LuaTable::new(hm));
         assert_eq!(main.kind(), LuaValKind::TABLE);
-        assert_eq!(main.is_float(), false);
+        assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
         assert_eq!(main.to_float().unwrap_err(), LuaError::FloatConversionErr);
         let main_clone = main.clone();
         assert_ne!(main_clone.val, main.val);
         assert_eq!(main_clone.kind(), main.kind());
-        assert_eq!(main.get_attr("foo").unwrap().kind(), LuaValKind::NIL);
-        let bar_get = main.get_attr("bar").unwrap();
+        assert_eq!(
+            main.get_attr(&LuaVal::from(String::from("foo")))
+                .unwrap()
+                .kind(),
+            LuaValKind::NIL
+        );
+        let bar_get = main.get_attr(&LuaVal::from(String::from("bar"))).unwrap();
         assert_eq!(bar_get.kind(), LuaValKind::INT);
         assert_eq!(bar_get.to_int().unwrap(), 2);
-        main.set_attr("bar", LuaVal::from(2.0)).unwrap();
-        let bar_get = main.get_attr("bar").unwrap();
+        main.set_attr(LuaVal::from(String::from("bar")), LuaVal::from(2.0))
+            .unwrap();
+        let bar_get = main.get_attr(&LuaVal::from(String::from("bar"))).unwrap();
         assert_eq!(bar_get.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(bar_get.to_float().unwrap(), 2.0, 0.1);
     }
@@ -744,50 +784,45 @@ mod tests {
     #[test]
     fn table_mutability() {
         let mut hm1 = HashMap::new();
-        hm1.insert(String::from("foo"), LuaVal::from(1));
+        hm1.insert(LuaVal::from(String::from("foo")), LuaVal::from(1));
         let mut hm2 = HashMap::new();
-        hm2.insert(String::from("bar"), LuaVal::from(2.0));
+        hm2.insert(LuaVal::from(String::from("bar")), LuaVal::from(2.0));
         // table1 {foo: 1}
         let table1 = LuaVal::from(LuaTable::new(hm1));
-        hm2.insert(String::from("foo"), table1);
+        hm2.insert(LuaVal::from(String::from("foo")), table1);
         // table2 { foo: { foo: 1 }, bar: 2.0 }
         let mut table2 = LuaVal::from(LuaTable::new(hm2));
         // table3 { foo: { foo: 1 }, bar: 2.0 }, table 3 is a reference to the same dict
         let table3 = table2.clone();
         // table2 { foo: { foo: 1 }, bar: 2 }
-        table2.set_attr("bar", LuaVal::from(2)).unwrap();
-        // check if table3 was updated as well
-        assert_eq!(table3.get_attr("bar").unwrap().to_int().unwrap(), 2);
-        // table2 { foo: { foo: 2 }, bar: 2 }
         table2
-            .get_attr("foo")
-            .unwrap()
-            .set_attr("foo", LuaVal::from(2))
+            .set_attr(LuaVal::from(String::from("bar")), LuaVal::from(2))
             .unwrap();
+        // check if table3 was updated as well
         assert_eq!(
             table3
-                .get_attr("foo")
-                .unwrap()
-                .get_attr("foo")
+                .get_attr(&LuaVal::from(String::from("bar")))
                 .unwrap()
                 .to_int()
                 .unwrap(),
             2
         );
-    }
-
-    #[test]
-    fn basic_types_mutability() {
-        // int cloning
-        let mut int = LuaVal::from(1);
-        let int2 = int.clone();
-        int.set(LuaVal::from(2));
-        assert_ne!(int.to_int(), int2.to_int());
-        // float cloning
-        let mut float = LuaVal::from(1.0);
-        let float2 = float.clone();
-        float.set(LuaVal::from(2.0));
-        assert_ne!(float.to_float().unwrap(), float2.to_float().unwrap());
+        // table2 { foo: { foo: 2 }, bar: 2 }
+        table2
+            .get_attr(&LuaVal::from(String::from("foo")))
+            .unwrap()
+            .set_attr(LuaVal::from(String::from("foo")), LuaVal::from(2))
+            .unwrap();
+        assert_eq!(
+            table3
+                .get_attr(&LuaVal::from(String::from("foo")))
+                .unwrap()
+                .get_attr(&LuaVal::from(String::from("foo")))
+                .unwrap()
+                .to_int()
+                .unwrap(),
+            2
+        );
     }
 
     fn get_eq_types() -> Vec<LuaVal> {
