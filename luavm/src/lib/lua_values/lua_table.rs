@@ -19,7 +19,7 @@ impl LuaTable {
         self.v.borrow_mut().insert(attr, val);
     }
 
-    /// Gets a reference to given attribute.
+    /// Gets a reference to the given attribute.
     pub fn get_attr(&self, attr: &LuaVal) -> LuaVal {
         match self.v.borrow().get(attr) {
             Some(val) => val.clone(),

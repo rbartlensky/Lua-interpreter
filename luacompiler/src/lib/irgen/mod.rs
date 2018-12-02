@@ -16,6 +16,7 @@ pub fn compile_to_ir(pt: &LuaParseTree) -> LuaIR {
 }
 
 /// Represents a compiler which translates a given Lua parse tree to an SSA IR.
+/// The compiler assumes that the `_ENV` variable is always stored in register 0!
 struct LuaToIR<'a> {
     pt: &'a LuaParseTree,
     reg_map: RegisterMap<'a>,
@@ -43,22 +44,7 @@ impl<'a> LuaToIR<'a> {
                     ridx: RIdx(ridx),
                     ref nodes,
                 } if ridx == lua5_3_y::R_STAT => {
-                    debug_assert!(nodes.len() == 3);
-                    match nodes[1] {
-                        Term { lexeme } if lexeme.tok_id() == lua5_3_l::T_EQ => {
-                            let value = self.compile_expr(&nodes[2]);
-                            let name = self.compile_variable(&nodes[0]);
-                            // because we are creating an IR which is in SSA form, it
-                            // means that each assignment creates a new register
-                            let reg = self.reg_map.get_new_reg();
-                            // if a variable is assigned a value multiple times, we have
-                            // to make sure that the map knows the new register which
-                            // holds the new value
-                            self.reg_map.set_reg(name, reg);
-                            self.instrs.push(HLInstr(Opcode::MOV, reg, value, 0));
-                        }
-                        _ => {}
-                    }
+                    self.compile_stat(nodes);
                 }
                 Nonterm { ridx: _, ref nodes } => {
                     for i in (0..nodes.len()).rev() {
@@ -71,6 +57,32 @@ impl<'a> LuaToIR<'a> {
             }
         }
         LuaIR::new(self.instrs, self.const_map, self.reg_map.get_lifetimes())
+    }
+
+    fn compile_stat(&mut self, nodes: &Vec<Node<u8>>) {
+        debug_assert!(nodes.len() == 3);
+        match nodes[1] {
+            Term { lexeme } if lexeme.tok_id() == lua5_3_l::T_EQ => {
+                // x = 3 => _ENV["x"] = 3
+                // compile the expression on the right
+                let value = self.compile_expr(&nodes[2]);
+                // load a reference to _ENV
+                let env_reg = self.reg_map.get_reg("_ENV").unwrap();
+                // prepare the attribute for _ENV which is the name of the variable
+                let name = self.compile_variable(&nodes[0]);
+                let name_index = self.const_map.get_str(name.to_string());
+                let attr_reg = self.reg_map.get_new_reg();
+                self.instrs
+                    .push(HLInstr(Opcode::LDS, attr_reg, name_index, 0));
+                // if a variable is assigned a value multiple times, we have
+                // to make sure that the map knows the new register which
+                // holds the new value
+                self.reg_map.set_reg(name, value);
+                self.instrs
+                    .push(HLInstr(Opcode::SetAttr, env_reg, attr_reg, value));
+            }
+            _ => {}
+        }
     }
 
     /// Jumps to the first child of <node> which denotes a variable name.
@@ -130,7 +142,24 @@ impl<'a> LuaToIR<'a> {
                         self.instrs.push(HLInstr(Opcode::LDS, reg, short_str, 0));
                         reg
                     }
-                    _ => self.reg_map.get_reg(value),
+                    lua5_3_l::T_NAME => {
+                        // if the variable is in a register, then we can return reg number
+                        // otherwise we have to generate code for `_ENV[<name>]`
+                        self.reg_map.get_reg(value).unwrap_or_else(|| {
+                            let env_reg = self.reg_map.get_reg("_ENV").unwrap();
+                            let name_index = self.const_map.get_str(value.to_string());
+                            let attr_reg = self.reg_map.get_new_reg();
+                            self.instrs
+                                .push(HLInstr(Opcode::LDS, attr_reg, name_index, 0));
+                            let reg = self.reg_map.get_new_reg();
+                            self.instrs
+                                .push(HLInstr(Opcode::GetAttr, reg, env_reg, attr_reg));
+                            reg
+                        })
+                    }
+                    _ => panic!(
+                        "Cannot compile terminals that are not variable names, numbers or strings."
+                    ),
                 }
             }
         }
@@ -187,20 +216,21 @@ mod tests {
         let pt = LuaParseTree::from_str(String::from("x = 1 + 2 * 3 / 2 ^ 2.0 // 1 - 2"));
         let ir = compile_to_ir(&pt.unwrap());
         let expected_instrs = vec![
-            HLInstr(Opcode::LDI, 0, 0, 0),
-            HLInstr(Opcode::LDI, 1, 1, 0),
-            HLInstr(Opcode::LDI, 2, 2, 0),
-            HLInstr(Opcode::MUL, 3, 1, 2),
-            HLInstr(Opcode::LDI, 4, 1, 0),
-            HLInstr(Opcode::LDF, 5, 0, 0),
-            HLInstr(Opcode::EXP, 6, 4, 5),
-            HLInstr(Opcode::DIV, 7, 3, 6),
-            HLInstr(Opcode::LDI, 8, 0, 0),
-            HLInstr(Opcode::FDIV, 9, 7, 8),
-            HLInstr(Opcode::ADD, 10, 0, 9),
-            HLInstr(Opcode::LDI, 11, 1, 0),
-            HLInstr(Opcode::SUB, 12, 10, 11),
-            HLInstr(Opcode::MOV, 13, 12, 0),
+            HLInstr(Opcode::LDI, 1, 0, 0),
+            HLInstr(Opcode::LDI, 2, 1, 0),
+            HLInstr(Opcode::LDI, 3, 2, 0),
+            HLInstr(Opcode::MUL, 4, 2, 3),
+            HLInstr(Opcode::LDI, 5, 1, 0),
+            HLInstr(Opcode::LDF, 6, 0, 0),
+            HLInstr(Opcode::EXP, 7, 5, 6),
+            HLInstr(Opcode::DIV, 8, 4, 7),
+            HLInstr(Opcode::LDI, 9, 0, 0),
+            HLInstr(Opcode::FDIV, 10, 8, 9),
+            HLInstr(Opcode::ADD, 11, 1, 10),
+            HLInstr(Opcode::LDI, 12, 1, 0),
+            HLInstr(Opcode::SUB, 13, 11, 12),
+            HLInstr(Opcode::LDS, 14, 0, 0),
+            HLInstr(Opcode::SetAttr, 0, 14, 13),
         ];
         assert_eq!(ir.instrs.len(), expected_instrs.len());
         for (lhs, rhs) in ir.instrs.iter().zip(expected_instrs.iter()) {
@@ -213,11 +243,15 @@ mod tests {
             regs[i.1] = !regs[i.1];
             // if at any point this assertion fails, it means that a register has been
             // assigned a value multiple times
-            assert!(regs[i.1]);
+            // SetAttr only updates the state of a register, so it doesn't mess up the
+            // correctness of the SSA
+            if i.0 != Opcode::SetAttr {
+                assert!(regs[i.1]);
+            }
         }
         // check lifetimes
         let expected_lifetimes = vec![
-            Lifetime::with_end_point(0, 1),
+            Lifetime::with_end_point(0, 15),
             Lifetime::with_end_point(1, 2),
             Lifetime::with_end_point(2, 3),
             Lifetime::with_end_point(3, 4),
@@ -231,6 +265,7 @@ mod tests {
             Lifetime::with_end_point(11, 12),
             Lifetime::with_end_point(12, 13),
             Lifetime::with_end_point(13, 14),
+            Lifetime::with_end_point(14, 15),
         ];
         assert_eq!(ir.lifetimes.len(), expected_lifetimes.len());
         for (lhs, rhs) in ir.lifetimes.iter().zip(expected_lifetimes.iter()) {
@@ -249,6 +284,81 @@ mod tests {
         for (lhs, rhs) in floats.iter().zip(expected_floats.iter()) {
             assert_eq!(lhs, rhs);
         }
-        assert_eq!(ir.const_map.get_strings().len(), 0);
+        let expected_strings = vec!["x"];
+        let strings = ir.const_map.get_strings();
+        assert_eq!(strings.len(), expected_strings.len());
+        for (lhs, rhs) in strings.iter().zip(expected_strings.iter()) {
+            assert_eq!(lhs, rhs);
+        }
     }
+
+    #[test]
+    fn correctness_of_ssa_ir2() {
+        let pt = LuaParseTree::from_str(String::from("x = 1\ny = x"));
+        let ir = compile_to_ir(&pt.unwrap());
+        let expected_instrs = vec![
+            HLInstr(Opcode::LDI, 1, 0, 0),
+            HLInstr(Opcode::LDS, 2, 0, 0),
+            HLInstr(Opcode::SetAttr, 0, 2, 1),
+            HLInstr(Opcode::LDS, 3, 1, 0),
+            HLInstr(Opcode::SetAttr, 0, 3, 1),
+        ];
+        assert_eq!(ir.instrs.len(), expected_instrs.len());
+        for (lhs, rhs) in ir.instrs.iter().zip(expected_instrs.iter()) {
+            assert_eq!(lhs, rhs);
+        }
+        // check that the IR is in SSA form
+        let mut regs = Vec::with_capacity(ir.instrs.len());
+        regs.resize(ir.instrs.len(), false);
+        for i in &ir.instrs {
+            regs[i.1] = !regs[i.1];
+            // if at any point this assertion fails, it means that a register has been
+            // assigned a value multiple times
+            if i.0 != Opcode::SetAttr {
+                assert!(regs[i.1]);
+            }
+        }
+        // check lifetimes
+        let expected_lifetimes = vec![
+            Lifetime::with_end_point(0, 4),
+            Lifetime::with_end_point(1, 4),
+            Lifetime::with_end_point(2, 3),
+            Lifetime::with_end_point(3, 4),
+        ];
+        assert_eq!(ir.lifetimes.len(), expected_lifetimes.len());
+        for (lhs, rhs) in ir.lifetimes.iter().zip(expected_lifetimes.iter()) {
+            assert_eq!(lhs, rhs);
+        }
+        // check constats map
+        let expected_ints = vec![1];
+        let ints = ir.const_map.get_ints();
+        assert_eq!(ints.len(), expected_ints.len());
+        for (lhs, rhs) in ints.iter().zip(expected_ints.iter()) {
+            assert_eq!(lhs, rhs);
+        }
+        assert!(ir.const_map.get_floats().is_empty());
+        let expected_strings = vec!["x", "y"];
+        let strings = ir.const_map.get_strings();
+        assert_eq!(strings.len(), expected_strings.len());
+        for (lhs, rhs) in strings.iter().zip(expected_strings.iter()) {
+            assert_eq!(lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn generates_get_attr_instr() {
+        let pt = LuaParseTree::from_str(String::from("x = y"));
+        let ir = compile_to_ir(&pt.unwrap());
+        let expected_instrs = vec![
+            HLInstr(Opcode::LDS, 1, 0, 0),
+            HLInstr(Opcode::GetAttr, 2, 0, 1),
+            HLInstr(Opcode::LDS, 3, 1, 0),
+            HLInstr(Opcode::SetAttr, 0, 3, 2),
+        ];
+        assert_eq!(ir.instrs.len(), expected_instrs.len());
+        for (lhs, rhs) in ir.instrs.iter().zip(expected_instrs.iter()) {
+            assert_eq!(lhs, rhs);
+        }
+    }
+
 }

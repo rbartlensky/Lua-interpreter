@@ -1,5 +1,5 @@
 mod lua_obj;
-mod lua_table;
+pub mod lua_table;
 mod tagging;
 
 use self::{lua_obj::*, lua_table::LuaTable, tagging::*};
@@ -54,6 +54,14 @@ impl LuaVal {
         match self.kind() {
             LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_string() },
             _ => false,
+        }
+    }
+
+    /// Gets the index of the underlying string in the constant table.
+    pub fn get_constant_index(&self) -> Option<usize> {
+        match self.kind() {
+            LuaValKind::BOXED => unsafe { (*self.as_boxed()).get_constant_index() },
+            _ => None,
         }
     }
 
@@ -264,7 +272,24 @@ impl From<String> for LuaVal {
     /// Create a float LuaVal.
     fn from(string: String) -> Self {
         LuaVal {
-            val: LuaValKind::BOXED ^ to_boxed(Box::new(LuaString { v: string })),
+            val: LuaValKind::BOXED
+                ^ to_boxed(Box::new(LuaString {
+                    v: string,
+                    const_index: None,
+                })),
+        }
+    }
+}
+
+impl From<(String, usize)> for LuaVal {
+    /// Create a float LuaVal.
+    fn from(string: (String, usize)) -> Self {
+        LuaVal {
+            val: LuaValKind::BOXED
+                ^ to_boxed(Box::new(LuaString {
+                    v: string.0,
+                    const_index: Some(string.1),
+                })),
         }
     }
 }
