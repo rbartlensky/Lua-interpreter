@@ -38,6 +38,7 @@ impl Lifetime {
 pub struct RegisterMap<'a> {
     lifetimes: Vec<Lifetime>,
     reg_maps: Vec<HashMap<&'a str, usize>>,
+    str_maps: Vec<HashMap<usize, usize>>,
 }
 
 impl<'a> RegisterMap<'a> {
@@ -45,6 +46,7 @@ impl<'a> RegisterMap<'a> {
         RegisterMap {
             lifetimes: vec![Lifetime::new(0)], // env's lifetime will be [0, 1)
             reg_maps: vec![HashMap::new()],
+            str_maps: vec![HashMap::new()],
         }
     }
 
@@ -52,11 +54,13 @@ impl<'a> RegisterMap<'a> {
     /// created map.
     pub fn push_scope(&mut self) {
         self.reg_maps.push(HashMap::new());
+        self.str_maps.push(HashMap::new());
     }
 
     /// Pops the last map of registers.
     pub fn pop_scope(&mut self) {
         self.reg_maps.pop();
+        self.str_maps.pop();
     }
 
     /// Creates and returns a new register.
@@ -110,6 +114,24 @@ impl<'a> RegisterMap<'a> {
     pub(crate) fn get_lifetimes(self) -> Vec<Lifetime> {
         self.lifetimes
     }
+
+    /// Set the register of the string at index <index> to <reg>.
+    pub fn set_str_reg(&mut self, index: usize, reg: usize) {
+        self.str_maps.last_mut().unwrap().insert(index, reg);
+    }
+
+    /// Get the register in which the constant string <index> is loaded.
+    pub fn get_str_reg(&mut self, index: usize) -> Option<usize> {
+        let lifetimes = &mut self.lifetimes;
+        for map in self.str_maps.iter().rev() {
+            if let Some(&reg) = map.get(&index) {
+                let len = lifetimes.len();
+                lifetimes[reg].set_end_point(len + 1);
+                return Some(reg);
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +149,19 @@ mod tests {
 
     #[test]
     fn correctly_maps_strings_to_registers() {
+        let mut rm = RegisterMap::new();
+        // create a new register
+        assert_eq!(rm.get_new_reg(), 1);
+        assert!(rm.get_str_reg(0).is_none());
+        rm.push_scope();
+        rm.set_str_reg(0, 1);
+        assert!(rm.get_str_reg(0).is_some());
+        rm.pop_scope();
+        assert!(rm.get_str_reg(0).is_none());
+    }
+
+    #[test]
+    fn correctly_maps_const_strs_to_registers() {
         let mut rm = RegisterMap::new();
         // create a new register
         assert_eq!(rm.get_new_reg(), 1);
