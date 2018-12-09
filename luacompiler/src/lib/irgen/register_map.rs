@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn registers_are_retrieved_in_the_correct_order() {
         let mut rm = RegisterMap::new();
-        for i in 0..3 {
+        for _ in 0..3 {
             rm.push_scope();
             rm.create_reg("foo");
         }
