@@ -84,9 +84,9 @@ impl LuaBytecode {
 
 impl fmt::Display for LuaBytecode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{{\n");
+        write!(f, "{{\n")?;
         for instr in &self.block {
-            write!(f, "  {}\n", instr);
+            write!(f, "  {}\n", instr)?;
         }
         write!(f, "}}")
     }

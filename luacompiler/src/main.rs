@@ -3,7 +3,7 @@ extern crate lrpar;
 extern crate luacompiler;
 
 use clap::{App, Arg};
-use luacompiler::{irgen::LuaToBytecode, LuaParseTree};
+use luacompiler::{bytecodegen::compile_to_bytecode, irgen::compile_to_ir, LuaParseTree};
 use std::path::PathBuf;
 
 fn main() {
@@ -22,8 +22,9 @@ fn main() {
     let file = matches.value_of("INPUT").unwrap();
     let parse_tree = LuaParseTree::new(&file);
     match parse_tree {
-        Ok(pt) => {
-            let bc = LuaToBytecode::new(&pt).compile();
+        Ok(ref pt) => {
+            let ir = compile_to_ir(&pt);
+            let bc = compile_to_bytecode(ir);
             // create a luabc file next to the input file
             let mut path = PathBuf::from(file);
             path.set_extension("luabc");

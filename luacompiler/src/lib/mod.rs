@@ -9,6 +9,7 @@ extern crate serde_derive;
 extern crate bincode;
 
 pub mod bytecode;
+pub mod bytecodegen;
 pub mod errors;
 pub mod irgen;
 
@@ -46,8 +47,12 @@ impl LuaParseTree {
         {
             let lexerdef = lua5_3_l::lexerdef();
             let mut lexer = lexerdef.lexer(&mut pt.contents);
-            let tree = lua5_3_y::parse(&mut lexer)?;
-            pt.tree = tree;
+            let (tree, errs) = lua5_3_y::parse(&mut lexer);
+            if let Some(tree) = tree {
+                pt.tree = tree;
+            } else {
+                return Err(CliError::from(errs));
+            }
         }
         Ok(pt)
     }
@@ -64,8 +69,12 @@ impl LuaParseTree {
         {
             let lexerdef = lua5_3_l::lexerdef();
             let mut lexer = lexerdef.lexer(&mut pt.contents);
-            let tree = lua5_3_y::parse(&mut lexer)?;
-            pt.tree = tree;
+            let (tree, errs) = lua5_3_y::parse(&mut lexer);
+            if let Some(tree) = tree {
+                pt.tree = tree;
+            } else {
+                return Err(CliError::from(errs));
+            }
         }
         Ok(pt)
     }

@@ -1,5 +1,4 @@
 language: rust
-rust: nightly
 before_script:
   - rustup component add rustfmt-preview
 script:

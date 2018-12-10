@@ -321,7 +321,7 @@ mod tests {
         let bar_get = main.get_attr("bar").unwrap();
         assert_eq!(bar_get.kind(), LuaValKind::INT);
         assert_eq!(bar_get.to_int().unwrap(), 2);
-        main.set_attr("bar", LuaVal::from(2.0));
+        main.set_attr("bar", LuaVal::from(2.0)).unwrap();
         let bar_get = main.get_attr("bar").unwrap();
         assert_eq!(bar_get.kind(), LuaValKind::FLOAT);
         assert_float_absolute_eq!(bar_get.to_float().unwrap(), 2.0, 0.1);
@@ -553,7 +553,8 @@ mod tests {
         table2
             .get_attr("foo")
             .unwrap()
-            .set_attr("foo", LuaVal::from(2));
+            .set_attr("foo", LuaVal::from(2))
+            .unwrap();
         assert_eq!(
             table3
                 .get_attr("foo")

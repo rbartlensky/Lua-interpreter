@@ -3,7 +3,7 @@ extern crate luacompiler;
 extern crate luavm;
 
 use clap::{App, Arg};
-use luacompiler::{irgen::LuaToBytecode, LuaParseTree};
+use luacompiler::{bytecodegen::compile_to_bytecode, irgen::compile_to_ir, LuaParseTree};
 use luavm::Vm;
 
 fn main() {
@@ -23,7 +23,7 @@ fn main() {
     let parse_tree = LuaParseTree::new(&file);
     match parse_tree {
         Ok(pt) => {
-            let bc = LuaToBytecode::new(&pt).compile();
+            let bc = compile_to_bytecode(compile_to_ir(&pt));
             let mut vm = Vm::new(bc);
             vm.eval();
         }
