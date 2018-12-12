@@ -5,26 +5,22 @@ use LuaVal;
 /// Represents a table in Lua.
 #[derive(Trace, Finalize)]
 pub struct LuaTable {
-    v: GcCell<HashMap<String, LuaVal>>,
+    v: GcCell<HashMap<LuaVal, LuaVal>>,
 }
 
 impl LuaTable {
     /// Creates a table with the given keys, and values.
-    pub fn new(hm: HashMap<String, LuaVal>) -> LuaTable {
+    pub fn new(hm: HashMap<LuaVal, LuaVal>) -> LuaTable {
         LuaTable { v: GcCell::new(hm) }
     }
 
     /// Sets the given attribute to `val`.
-    pub fn set(&self, attr: &str, val: LuaVal) {
-        self.v
-            .borrow_mut()
-            .entry(attr.to_string())
-            .or_insert(LuaVal::new())
-            .set(val);
+    pub fn set_attr(&self, attr: LuaVal, val: LuaVal) {
+        self.v.borrow_mut().insert(attr, val);
     }
 
     /// Gets a reference to given attribute.
-    pub fn get_attr(&self, attr: &str) -> LuaVal {
+    pub fn get_attr(&self, attr: &LuaVal) -> LuaVal {
         match self.v.borrow().get(attr) {
             Some(val) => val.clone(),
             None => LuaVal::new(),

@@ -8,4 +8,6 @@ pub enum LuaError {
     IntConversionErr,
     /// Raised when a conversion to float fails.
     FloatConversionErr,
+    /// Raised when a conversion to string fails.
+    StringConversionErr,
 }

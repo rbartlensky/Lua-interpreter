@@ -22,6 +22,8 @@ pub fn ldf(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     Ok(())
 }
 
-pub fn lds(_vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
-    unreachable!("Strings are not implemented yet.")
+pub fn lds(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
+    let val = vm.bytecode.get_string(second_arg(instr));
+    vm.registers[first_arg(instr) as usize] = LuaVal::from(val.to_string());
+    Ok(())
 }
