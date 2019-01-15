@@ -12,19 +12,20 @@ mod instructions;
 mod lua_values;
 
 use errors::LuaError;
-use instructions::{arithmetic_operators::*, loads::*, tables::*};
+use instructions::{arithmetic_operators::*, functions::*, loads::*, tables::*};
 use lua_values::{lua_table::LuaTable, LuaVal};
 use luacompiler::bytecode::{instructions::opcode, LuaBytecode};
 use std::collections::HashMap;
 
 /// The instruction handler for each opcode.
 const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
-    mov, ldi, ldf, lds, add, sub, mul, div, modulus, fdiv, exp, get_attr, set_attr,
+    mov, ldi, ldf, lds, add, sub, mul, div, modulus, fdiv, exp, get_attr, set_attr, closure,
 ];
 
 /// Represents a `LuaBytecode` interpreter.
 pub struct Vm {
     pub bytecode: LuaBytecode,
+    pub curr_func: usize,
     pub registers: Vec<LuaVal>,
     /// All attributes of _ENV that are also part of the string constant table are stored
     /// in a vector. Let's consider an example: "x" is mapped to index 2 in the constant
@@ -47,8 +48,10 @@ impl Vm {
         }
         let mut env_attrs = Vec::new();
         env_attrs.resize(bytecode.get_strings_len(), LuaVal::new());
+        let curr_func = bytecode.get_main_function();
         Vm {
             bytecode,
+            curr_func,
             registers,
             env_attrs,
         }
@@ -57,15 +60,9 @@ impl Vm {
     /// Evaluate the program.
     pub fn eval(&mut self) {
         let mut pc = 0;
-        let len = self
-            .bytecode
-            .get_function(self.bytecode.get_main_function())
-            .instrs_len();
+        let len = self.bytecode.get_function(self.curr_func).instrs_len();
         while pc < len {
-            let instr = self
-                .bytecode
-                .get_function(self.bytecode.get_main_function())
-                .get_instr(pc);
+            let instr = self.bytecode.get_function(self.curr_func).get_instr(pc);
             (OPCODE_HANDLER[opcode(instr) as usize])(self, instr).unwrap();
             pc += 1;
         }

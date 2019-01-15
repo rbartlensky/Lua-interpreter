@@ -1,8 +1,9 @@
+pub mod lua_closure;
 mod lua_obj;
 pub mod lua_table;
 mod tagging;
 
-use self::{lua_obj::*, lua_table::LuaTable, tagging::*};
+use self::{lua_closure::LuaClosure, lua_obj::*, lua_table::LuaTable, tagging::*};
 use errors::LuaError;
 use gc::{Finalize, Gc, Trace};
 use std::{
@@ -19,9 +20,11 @@ pub struct LuaVal {
 impl Finalize for LuaVal {}
 unsafe impl Trace for LuaVal {
     custom_trace!(this, {
-        // only tables have a Gc inside, so there is no need to mark anything else
-        if let LuaValKind::TABLE = this.kind() {
-            mark(unsafe { &*table_ptr(this.val) });
+        // only tables and closures have a Gc inside, so there is no need to mark anything else
+        match this.kind() {
+            LuaValKind::TABLE => mark(unsafe { &*table_ptr(this.val) }),
+            LuaValKind::CLOSURE => mark(unsafe { &*closure_ptr(this.val) }),
+            _ => {}
         }
     });
 }
@@ -205,6 +208,8 @@ impl PartialEq for LuaVal {
                 return true;
             } else if self.kind() == LuaValKind::TABLE {
                 return unsafe { (*table_ptr(self.val)).same_ptr(&*table_ptr(other.val)) };
+            } else if self.kind() == LuaValKind::CLOSURE {
+                return unsafe { (*closure_ptr(self.val)).same_ptr(&*closure_ptr(other.val)) };
             }
         }
         false
@@ -216,9 +221,6 @@ impl Eq for LuaVal {}
 impl Hash for LuaVal {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self.kind() {
-            LuaValKind::INT | LuaValKind::FLOAT | LuaValKind::NIL | LuaValKind::TABLE => {
-                self.val.hash(state)
-            }
             LuaValKind::BOXED => {
                 let val = unsafe { &*self.as_boxed() };
                 if val.is_string() {
@@ -234,6 +236,7 @@ impl Hash for LuaVal {
                     val.to_int().unwrap().hash(state)
                 }
             }
+            _ => self.val.hash(state),
         }
     }
 }
@@ -303,6 +306,15 @@ impl From<LuaTable> for LuaVal {
     }
 }
 
+impl From<LuaClosure> for LuaVal {
+    /// Create a closure LuaVal
+    fn from(closure: LuaClosure) -> Self {
+        LuaVal {
+            val: LuaValKind::CLOSURE ^ to_raw_ptr(Gc::new(closure)),
+        }
+    }
+}
+
 impl Drop for LuaVal {
     fn drop(&mut self) {
         match self.kind() {
@@ -314,6 +326,9 @@ impl Drop for LuaVal {
             },
             LuaValKind::TABLE => unsafe {
                 Box::from_raw(table_ptr(self.val));
+            },
+            LuaValKind::CLOSURE => unsafe {
+                Box::from_raw(closure_ptr(self.val));
             },
         }
     }
@@ -328,6 +343,9 @@ impl Clone for LuaVal {
             },
             LuaValKind::TABLE => unsafe {
                 LuaValKind::TABLE ^ to_raw_ptr((*table_ptr(self.val)).clone())
+            },
+            LuaValKind::CLOSURE => unsafe {
+                LuaValKind::CLOSURE ^ to_raw_ptr((*closure_ptr(self.val)).clone())
             },
         };
         LuaVal { val }
@@ -460,6 +478,19 @@ mod tests {
         assert_float_absolute_eq!(bar_get.to_float().unwrap(), 2.0, 0.1);
     }
 
+    #[test]
+    fn closure_type() {
+        let mut main = LuaVal::from(LuaClosure::new(0));
+        assert_eq!(main.kind(), LuaValKind::CLOSURE);
+        assert_eq!(main.is_aop_float(), false);
+        assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
+        assert_eq!(main.to_float().unwrap_err(), LuaError::FloatConversionErr);
+        test_get_and_set_attr_errors(&mut main);
+        let main_clone = main.clone();
+        assert_ne!(main_clone.val, main.val);
+        assert_eq!(main_clone.kind(), main.kind());
+    }
+
     fn get_types() -> Vec<LuaVal> {
         vec![
             LuaVal::new(),
@@ -467,18 +498,19 @@ mod tests {
             LuaVal::from(3.0),
             LuaVal::from(LuaTable::new(HashMap::new())),
             LuaVal::from(String::from("3.0")),
+            LuaVal::from(LuaClosure::new(0)),
         ]
     }
 
     #[test]
     fn add() {
         let types = get_types();
-        // cannot add nils or tables
         for t in types.iter() {
-            assert!(types[0].add(t).is_err());
-            assert!(types[3].add(t).is_err());
-            assert!(t.add(&types[0]).is_err());
-            assert!(t.add(&types[3]).is_err());
+            // cannot add nils, tables or closures
+            for i in vec![0, 3, 5] {
+                assert!(types[i].add(t).is_err());
+                assert!(t.add(&types[i]).is_err());
+            }
         }
         // int + int
         let val = types[1].add(&types[1]).unwrap();
@@ -521,12 +553,12 @@ mod tests {
     #[test]
     fn sub() {
         let types = get_types();
-        // cannot sub nils or tables
         for t in types.iter() {
-            assert!(types[0].sub(t).is_err());
-            assert!(types[3].sub(t).is_err());
-            assert!(t.sub(&types[0]).is_err());
-            assert!(t.sub(&types[3]).is_err());
+            // cannot sub nils, tables or closures
+            for i in vec![0, 3, 5] {
+                assert!(types[i].add(t).is_err());
+                assert!(t.add(&types[i]).is_err());
+            }
         }
         // int - int
         let val = types[1].sub(&types[1]).unwrap();
@@ -569,12 +601,12 @@ mod tests {
     #[test]
     fn mul() {
         let types = get_types();
-        // cannot mul nils or tables
         for t in types.iter() {
-            assert!(types[0].mul(t).is_err());
-            assert!(types[3].mul(t).is_err());
-            assert!(t.mul(&types[0]).is_err());
-            assert!(t.mul(&types[3]).is_err());
+            // cannot mul nils, tables or closures
+            for i in vec![0, 3, 5] {
+                assert!(types[i].add(t).is_err());
+                assert!(t.add(&types[i]).is_err());
+            }
         }
         // int * int
         let val = types[1].mul(&types[1]).unwrap();
@@ -617,12 +649,12 @@ mod tests {
     #[test]
     fn div() {
         let types = get_types();
-        // cannot div nils or tables
         for t in types.iter() {
-            assert!(types[0].div(t).is_err());
-            assert!(types[3].div(t).is_err());
-            assert!(t.div(&types[0]).is_err());
-            assert!(t.div(&types[3]).is_err());
+            // cannot div nils, tables or closures
+            for i in vec![0, 3, 5] {
+                assert!(types[i].add(t).is_err());
+                assert!(t.add(&types[i]).is_err());
+            }
         }
         // int / int
         let val = types[1].div(&types[1]).unwrap();
@@ -665,12 +697,12 @@ mod tests {
     #[test]
     fn modulus() {
         let types = get_types();
-        // cannot modulus nils or tables
         for t in types.iter() {
-            assert!(types[0].modulus(t).is_err());
-            assert!(types[3].modulus(t).is_err());
-            assert!(t.modulus(&types[0]).is_err());
-            assert!(t.modulus(&types[3]).is_err());
+            // cannot mod nils, tables or closures
+            for i in vec![0, 3, 5] {
+                assert!(types[i].add(t).is_err());
+                assert!(t.add(&types[i]).is_err());
+            }
         }
         // int % int
         let val = types[1].modulus(&types[1]).unwrap();
@@ -713,12 +745,12 @@ mod tests {
     #[test]
     fn fdiv() {
         let types = get_types();
-        // cannot fdiv nils or tables
         for t in types.iter() {
-            assert!(types[0].fdiv(t).is_err());
-            assert!(types[3].fdiv(t).is_err());
-            assert!(t.fdiv(&types[0]).is_err());
-            assert!(t.fdiv(&types[3]).is_err());
+            // cannot fdiv nils, tables or closures
+            for i in vec![0, 3, 5] {
+                assert!(types[i].add(t).is_err());
+                assert!(t.add(&types[i]).is_err());
+            }
         }
         // int // int
         let val = types[1].fdiv(&types[1]).unwrap();
@@ -761,12 +793,12 @@ mod tests {
     #[test]
     fn exp() {
         let types = get_types();
-        // cannot exp nils or tables
         for t in types.iter() {
-            assert!(types[0].exp(t).is_err());
-            assert!(types[3].exp(t).is_err());
-            assert!(t.exp(&types[0]).is_err());
-            assert!(t.exp(&types[3]).is_err());
+            // cannot exp nils, tables or closures
+            for i in vec![0, 3, 5] {
+                assert!(types[i].add(t).is_err());
+                assert!(t.add(&types[i]).is_err());
+            }
         }
         // int ^ int
         let val = types[1].exp(&types[1]).unwrap();
@@ -856,6 +888,7 @@ mod tests {
             LuaVal::from(1.0),
             LuaVal::from(String::from("1.0")),
             LuaVal::from(LuaTable::new(HashMap::new())),
+            LuaVal::from(LuaClosure::new(0)),
         ]
     }
 
@@ -867,8 +900,9 @@ mod tests {
         assert_eq!(int, types[1]);
         assert_ne!(int, types[2]);
         assert_ne!(int, types[3]);
+        assert_ne!(int, types[4]);
         let int = LuaVal::from(2);
-        for i in 0..4 {
+        for i in 0..5 {
             assert_ne!(int, types[i]);
         }
     }
@@ -881,8 +915,9 @@ mod tests {
         assert_eq!(float, types[1]);
         assert_ne!(float, types[2]);
         assert_ne!(float, types[3]);
+        assert_ne!(float, types[4]);
         let float = LuaVal::from(2.0);
-        for i in 0..4 {
+        for i in 0..5 {
             assert_ne!(float, types[i]);
         }
     }
@@ -892,7 +927,7 @@ mod tests {
         let types = get_eq_types();
         let table = LuaVal::from(LuaTable::new(HashMap::new()));
         assert_eq!(table, table);
-        for i in 0..4 {
+        for i in 0..5 {
             assert_ne!(table, types[i]);
         }
     }
@@ -905,8 +940,9 @@ mod tests {
         assert_ne!(string, types[1]);
         assert_eq!(string, types[2]);
         assert_ne!(string, types[3]);
+        assert_ne!(string, types[4]);
         let string = LuaVal::from(String::from("2.0"));
-        for i in 0..4 {
+        for i in 0..5 {
             assert_ne!(string, types[i]);
         }
     }
