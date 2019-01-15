@@ -1,24 +1,18 @@
-use bytecode::instructions::HLInstr;
-use irgen::{constants_map::ConstantsMap, register_map::Lifetime};
+use irgen::{compiled_func::CompiledFunc, constants_map::ConstantsMap};
 
 /// Represents an IR in which all instructions are in SSA form.
 pub struct LuaIR {
-    pub instrs: Vec<HLInstr>,
+    pub functions: Vec<CompiledFunc>,
+    pub main_func: usize,
     pub const_map: ConstantsMap,
-    pub lifetimes: Vec<Lifetime>,
 }
 
 impl LuaIR {
-    pub fn new(
-        instrs: Vec<HLInstr>,
-        const_map: ConstantsMap,
-        mut lifetimes: Vec<Lifetime>,
-    ) -> LuaIR {
-        lifetimes.sort_by(|x, y| x.start_point().cmp(&y.start_point()));
+    pub fn new(functions: Vec<CompiledFunc>, main_func: usize, const_map: ConstantsMap) -> LuaIR {
         LuaIR {
-            instrs,
+            functions,
+            main_func,
             const_map,
-            lifetimes,
         }
     }
 }

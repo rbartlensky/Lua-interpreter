@@ -1,8 +1,12 @@
+pub mod compiled_func;
 pub mod constants_map;
 pub mod lua_ir;
 pub mod register_map;
 
-use self::{constants_map::ConstantsMap, lua_ir::LuaIR, register_map::RegisterMap};
+use self::{
+    compiled_func::CompiledFunc, constants_map::ConstantsMap, lua_ir::LuaIR,
+    register_map::RegisterMap,
+};
 use bytecode::instructions::{HLInstr, Opcode};
 use cfgrammar::RIdx;
 use lrpar::Node::{self, *};
@@ -12,7 +16,7 @@ use LuaParseTree;
 
 /// Compile the given parse tree into an SSA IR.
 pub fn compile_to_ir(pt: &LuaParseTree) -> LuaIR {
-    LuaToIR::new(pt).compile()
+    LuaToIR::new(pt).to_lua_ir()
 }
 
 /// Represents a compiler which translates a given Lua parse tree to an SSA IR.
@@ -21,7 +25,8 @@ struct LuaToIR<'a> {
     pt: &'a LuaParseTree,
     reg_map: RegisterMap<'a>,
     const_map: ConstantsMap,
-    instrs: Vec<HLInstr>,
+    functions: Vec<CompiledFunc>,
+    curr_function: usize,
 }
 
 impl<'a> LuaToIR<'a> {
@@ -30,13 +35,21 @@ impl<'a> LuaToIR<'a> {
             pt,
             reg_map: RegisterMap::new(),
             const_map: ConstantsMap::new(),
-            instrs: vec![],
+            functions: vec![CompiledFunc::new(0)],
+            curr_function: 0,
         }
     }
 
-    /// Compile the parse tree to an intermediate representation.
-    pub fn compile(mut self) -> LuaIR {
-        let mut pt_nodes = vec![&self.pt.tree];
+    // Compile and return the intermediate representation of the given lua parse tree.
+    pub fn to_lua_ir(mut self) -> LuaIR {
+        self.compile(&self.pt.tree);
+        self.functions[self.curr_function].set_lifetimes(self.reg_map.get_lifetimes());
+        LuaIR::new(self.functions, self.curr_function, self.const_map)
+    }
+
+    /// Compile the parse tree.
+    fn compile(&mut self, node: &Node<u8>) {
+        let mut pt_nodes = vec![node];
         while !pt_nodes.is_empty() {
             let node = pt_nodes.pop().unwrap();
             match *node {
@@ -56,7 +69,6 @@ impl<'a> LuaToIR<'a> {
                 }
             }
         }
-        LuaIR::new(self.instrs, self.const_map, self.reg_map.get_lifetimes())
     }
 
     /// Check if <node> is a 'local' term.
@@ -100,7 +112,7 @@ impl<'a> LuaToIR<'a> {
     /// * `right` - The expression that is evaluated
     /// * `is_local_decl` - Whether the assignment is local or not.
     fn compile_assignment(&mut self, left: &Node<u8>, right: &Node<u8>, is_local_decl: bool) {
-        let old_len = self.instrs.len();
+        let old_len = self.functions[self.curr_function].instrs().len();
         let mut value = self.compile_expr(right);
         let name = self.compile_variable(left);
         // the register map only keeps track of local variables
@@ -113,9 +125,14 @@ impl<'a> LuaToIR<'a> {
             // computed and stored in some register. Because we are compiling an
             // assignment, we will create a copy of this result and store it in <left>.
             // See test `load_string_multiple_times`.
-            if self.instrs.len() == old_len {
+            if self.functions[self.curr_function].instrs().len() == old_len {
                 let new_reg = self.reg_map.get_new_reg();
-                self.instrs.push(HLInstr(Opcode::MOV, new_reg, value, 0));
+                self.functions[self.curr_function].push_instr(HLInstr(
+                    Opcode::MOV,
+                    new_reg,
+                    value,
+                    0,
+                ));
                 value = new_reg;
             }
             // if a variable is assigned a value multiple times, we have to make sure
@@ -128,8 +145,12 @@ impl<'a> LuaToIR<'a> {
             // prepare the attribute for _ENV which is the name of the variable
             let name_index = self.const_map.get_str(name.to_string());
             let attr_reg = self.get_const_str_reg(name_index);
-            self.instrs
-                .push(HLInstr(Opcode::SetAttr, env_reg, attr_reg, value));
+            self.functions[self.curr_function].push_instr(HLInstr(
+                Opcode::SetAttr,
+                env_reg,
+                attr_reg,
+                value,
+            ));
         }
     }
 
@@ -141,7 +162,12 @@ impl<'a> LuaToIR<'a> {
             Some(i) => i,
             None => {
                 let reg = self.reg_map.get_new_reg();
-                self.instrs.push(HLInstr(Opcode::LDS, reg, name_index, 0));
+                self.functions[self.curr_function].push_instr(HLInstr(
+                    Opcode::LDS,
+                    reg,
+                    name_index,
+                    0,
+                ));
                 self.reg_map.set_str_reg(name_index, reg);
                 reg
             }
@@ -177,7 +203,7 @@ impl<'a> LuaToIR<'a> {
                     let right = self.compile_expr(&nodes[2]);
                     let new_var = self.reg_map.get_new_reg();
                     let instr = self.get_instr(&nodes[1], new_var, left, right);
-                    self.instrs.push(instr);
+                    self.functions[self.curr_function].push_instr(instr);
                     new_var
                 }
             }
@@ -190,10 +216,20 @@ impl<'a> LuaToIR<'a> {
                         let reg = self.reg_map.get_new_reg();
                         if value.contains(".") {
                             let fl = self.const_map.get_float(value.to_string());
-                            self.instrs.push(HLInstr(Opcode::LDF, reg, fl, 0));
+                            self.functions[self.curr_function].push_instr(HLInstr(
+                                Opcode::LDF,
+                                reg,
+                                fl,
+                                0,
+                            ));
                         } else {
                             let int = self.const_map.get_int(value.parse().unwrap());
-                            self.instrs.push(HLInstr(Opcode::LDI, reg, int, 0));
+                            self.functions[self.curr_function].push_instr(HLInstr(
+                                Opcode::LDI,
+                                reg,
+                                int,
+                                0,
+                            ));
                         }
                         reg
                     }
@@ -211,8 +247,12 @@ impl<'a> LuaToIR<'a> {
                             let name_index = self.const_map.get_str(value.to_string());
                             let attr_reg = self.get_const_str_reg(name_index);
                             let reg = self.reg_map.get_new_reg();
-                            self.instrs
-                                .push(HLInstr(Opcode::GetAttr, reg, env_reg, attr_reg));
+                            self.functions[self.curr_function].push_instr(HLInstr(
+                                Opcode::GetAttr,
+                                reg,
+                                env_reg,
+                                attr_reg,
+                            ));
                             reg
                         })
                     }
@@ -269,6 +309,14 @@ impl<'a> LuaToIR<'a> {
 mod tests {
     use super::*;
     use irgen::register_map::Lifetime;
+    use std::fmt::Debug;
+
+    fn check_eq<T: Debug + PartialEq>(output: &Vec<T>, expected: &Vec<T>) {
+        assert_eq!(output.len(), expected.len());
+        for (lhs, rhs) in output.iter().zip(expected.iter()) {
+            assert_eq!(lhs, rhs);
+        }
+    }
 
     #[test]
     fn correctness_of_ssa_ir() {
@@ -291,14 +339,12 @@ mod tests {
             HLInstr(Opcode::LDS, 14, 0, 0),
             HLInstr(Opcode::SetAttr, 0, 14, 13),
         ];
-        assert_eq!(ir.instrs.len(), expected_instrs.len());
-        for (lhs, rhs) in ir.instrs.iter().zip(expected_instrs.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        let function = &ir.functions[0];
+        check_eq(function.instrs(), &expected_instrs);
         // check that the IR is in SSA form
-        let mut regs = Vec::with_capacity(ir.instrs.len());
-        regs.resize(ir.instrs.len(), false);
-        for i in &ir.instrs {
+        let mut regs = Vec::with_capacity(function.instrs().len());
+        regs.resize(function.instrs().len(), false);
+        for i in function.instrs() {
             regs[i.1] = !regs[i.1];
             // if at any point this assertion fails, it means that a register has been
             // assigned a value multiple times
@@ -326,29 +372,17 @@ mod tests {
             Lifetime::with_end_point(13, 14),
             Lifetime::with_end_point(14, 15),
         ];
-        assert_eq!(ir.lifetimes.len(), expected_lifetimes.len());
-        for (lhs, rhs) in ir.lifetimes.iter().zip(expected_lifetimes.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        check_eq(function.lifetimes(), &expected_lifetimes);
         // check constats map
         let expected_ints = vec![1, 2, 3];
         let ints = ir.const_map.get_ints();
-        assert_eq!(ints.len(), expected_ints.len());
-        for (lhs, rhs) in ints.iter().zip(expected_ints.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        check_eq(&ints, &expected_ints);
         let expected_floats = vec![2.0];
         let floats = ir.const_map.get_floats();
-        assert_eq!(floats.len(), expected_floats.len());
-        for (lhs, rhs) in floats.iter().zip(expected_floats.iter()) {
-            assert_eq!(lhs, rhs);
-        }
-        let expected_strings = vec!["x"];
+        check_eq(&floats, &expected_floats);
+        let expected_strings = vec!["x".to_string()];
         let strings = ir.const_map.get_strings();
-        assert_eq!(strings.len(), expected_strings.len());
-        for (lhs, rhs) in strings.iter().zip(expected_strings.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        check_eq(&strings, &expected_strings);
     }
 
     #[test]
@@ -363,14 +397,12 @@ mod tests {
             HLInstr(Opcode::LDS, 4, 1, 0),     // R(4) = STR(1) == "y"
             HLInstr(Opcode::SetAttr, 0, 4, 3), // _ENV["y"] = R(4); y = x
         ];
-        assert_eq!(ir.instrs.len(), expected_instrs.len());
-        for (lhs, rhs) in ir.instrs.iter().zip(expected_instrs.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        let function = &ir.functions[ir.main_func];
+        check_eq(function.instrs(), &expected_instrs);
         // check that the IR is in SSA form
-        let mut regs = Vec::with_capacity(ir.instrs.len());
-        regs.resize(ir.instrs.len(), false);
-        for i in &ir.instrs {
+        let mut regs = Vec::with_capacity(function.instrs().len());
+        regs.resize(function.instrs().len(), false);
+        for i in function.instrs() {
             regs[i.1] = !regs[i.1];
             // if at any point this assertion fails, it means that a register has been
             // assigned a value multiple times
@@ -386,24 +418,15 @@ mod tests {
             Lifetime::with_end_point(3, 4),
             Lifetime::with_end_point(4, 5),
         ];
-        assert_eq!(ir.lifetimes.len(), expected_lifetimes.len());
-        for (lhs, rhs) in ir.lifetimes.iter().zip(expected_lifetimes.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        check_eq(function.lifetimes(), &expected_lifetimes);
         // check constats map
         let expected_ints = vec![1];
         let ints = ir.const_map.get_ints();
-        assert_eq!(ints.len(), expected_ints.len());
-        for (lhs, rhs) in ints.iter().zip(expected_ints.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        check_eq(&ints, &expected_ints);
         assert!(ir.const_map.get_floats().is_empty());
-        let expected_strings = vec!["x", "y"];
+        let expected_strings = vec!["x".to_string(), "y".to_string()];
         let strings = ir.const_map.get_strings();
-        assert_eq!(strings.len(), expected_strings.len());
-        for (lhs, rhs) in strings.iter().zip(expected_strings.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        check_eq(&strings, &expected_strings);
     }
 
     #[test]
@@ -416,10 +439,8 @@ mod tests {
             HLInstr(Opcode::LDS, 3, 1, 0),
             HLInstr(Opcode::SetAttr, 0, 3, 2),
         ];
-        assert_eq!(ir.instrs.len(), expected_instrs.len());
-        for (lhs, rhs) in ir.instrs.iter().zip(expected_instrs.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        let function = &ir.functions[0];
+        check_eq(function.instrs(), &expected_instrs);
     }
 
     #[test]
@@ -431,10 +452,8 @@ mod tests {
             HLInstr(Opcode::LDS, 2, 0, 0),
             HLInstr(Opcode::SetAttr, 0, 2, 1),
         ];
-        assert_eq!(ir.instrs.len(), expected_instrs.len());
-        for (lhs, rhs) in ir.instrs.iter().zip(expected_instrs.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        let function = &ir.functions[0];
+        check_eq(function.instrs(), &expected_instrs);
     }
 
     #[test]
@@ -442,10 +461,8 @@ mod tests {
         let pt = LuaParseTree::from_str(String::from("local x = \"1\"\nlocal y = \"1\""));
         let ir = compile_to_ir(&pt.unwrap());
         let expected_instrs = vec![HLInstr(Opcode::LDS, 1, 0, 0), HLInstr(Opcode::MOV, 2, 1, 0)];
-        assert_eq!(ir.instrs.len(), expected_instrs.len());
-        for (lhs, rhs) in ir.instrs.iter().zip(expected_instrs.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        let function = &ir.functions[ir.main_func];
+        check_eq(function.instrs(), &expected_instrs);
         let pt = LuaParseTree::from_str(String::from("x = \"1\"\ny = \"x\""));
         let ir = compile_to_ir(&pt.unwrap());
         let expected_instrs = vec![
@@ -456,9 +473,7 @@ mod tests {
             // notice that it is reusing register 2!
             HLInstr(Opcode::SetAttr, 0, 3, 2), // _ENV["y"] = "x"
         ];
-        assert_eq!(ir.instrs.len(), expected_instrs.len());
-        for (lhs, rhs) in ir.instrs.iter().zip(expected_instrs.iter()) {
-            assert_eq!(lhs, rhs);
-        }
+        let function = &ir.functions[ir.main_func];
+        check_eq(function.instrs(), &expected_instrs);
     }
 }
