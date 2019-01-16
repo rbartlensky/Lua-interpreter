@@ -195,6 +195,13 @@ impl LuaVal {
     pub fn exp(&self, other: &LuaVal) -> Result<LuaVal, LuaError> {
         Ok(LuaVal::from(self.to_float()?.powf(other.to_float()?)))
     }
+
+    pub fn closure_index(&self) -> Result<usize, LuaError> {
+        if let LuaValKind::CLOSURE = self.kind() {
+            return Ok(unsafe { (*closure_ptr(self.val)).index() });
+        }
+        Err(LuaError::NotAClosure)
+    }
 }
 
 impl PartialEq for LuaVal {

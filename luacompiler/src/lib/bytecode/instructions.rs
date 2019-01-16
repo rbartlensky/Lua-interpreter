@@ -41,6 +41,7 @@ pub fn format_instr(instr: u32) -> String {
         11 => "GetAttr",
         12 => "SetAttr",
         13 => "Closure",
+        14 => "Call",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(

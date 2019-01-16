@@ -13,3 +13,23 @@ pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     vm.registers[first_arg(instr) as usize] = LuaVal::from(LuaClosure::new(index));
     Ok(())
 }
+
+pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
+    // The closure_index method gives us an index of the bytecode.functions vector
+    // where we have to "jump" in order to find the instructions of the callee.
+    let index = vm.registers[first_arg(instr) as usize].closure_index()?;
+    let old_func = vm.curr_func;
+    vm.curr_func = index;
+    // push the first `reg_num` registers to the stack, as the function will modify these
+    let reg_num = vm.bytecode.get_function(vm.curr_func).reg_count();
+    for i in 1..reg_num {
+        vm.stack.push(vm.registers[i].clone());
+    }
+    vm.eval();
+    // restore the state of the caller
+    for i in (1..reg_num).rev() {
+        vm.registers[i] = vm.stack.pop().unwrap();
+    }
+    vm.curr_func = old_func;
+    Ok(())
+}
