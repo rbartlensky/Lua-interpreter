@@ -94,30 +94,41 @@ impl<'a> LuaToIR<'a> {
     /// Compile the children of a <stat> node.
     /// The method can only compile variable assignments.
     fn compile_stat(&mut self, stat_nodes: &Vec<Node<u8>>) {
-        debug_assert!(stat_nodes.len() == 3);
-        // look for stat_nodes = [<local>, <namelist>, <eqexplistopt>]
-        if is_term(&stat_nodes[0], lua5_3_l::T_LOCAL) {
-            match stat_nodes[2] {
-                // nodes = [<eq>, <explist>]
+        let len = stat_nodes.len();
+        if len == 3 {
+            // look for stat_nodes = [<local>, <namelist>, <eqexplistopt>]
+            if is_term(&stat_nodes[0], lua5_3_l::T_LOCAL) {
+                match stat_nodes[2] {
+                    // nodes = [<eq>, <explist>]
+                    Nonterm {
+                        ridx: RIdx(ridx),
+                        ref nodes,
+                    } if ridx == lua5_3_y::R_EQEXPLISTOPT => {
+                        // left hand-side = <namelist> and right hand-side = <explist>
+                        self.compile_assignment(&stat_nodes[1], &nodes[1], true);
+                    }
+                    _ => {}
+                }
+            } else {
+                match (&stat_nodes[0], &stat_nodes[1]) {
+                    // stat_nodes = [<function>, <funcname>, <funcbody>]
+                    (Term { lexeme }, _) if lexeme.tok_id() == lua5_3_l::T_FUNCTION => {
+                        self.compile_assignment(&stat_nodes[1], &stat_nodes[2], false);
+                    }
+                    // stat_nodes = [<varlist>, <eq>, <explist>]
+                    (_, Term { lexeme }) if lexeme.tok_id() == lua5_3_l::T_EQ => {
+                        self.compile_assignment(&stat_nodes[0], &stat_nodes[2], false);
+                    }
+                    _ => {}
+                }
+            }
+        } else if len == 1 {
+            // stat_nodes = <functioncall>
+            match stat_nodes[0] {
                 Nonterm {
                     ridx: RIdx(ridx),
                     ref nodes,
-                } if ridx == lua5_3_y::R_EQEXPLISTOPT => {
-                    // left hand-side = <namelist> and right hand-side = <explist>
-                    self.compile_assignment(&stat_nodes[1], &nodes[1], true);
-                }
-                _ => {}
-            }
-        } else {
-            match (&stat_nodes[0], &stat_nodes[1]) {
-                // stat_nodes = [<function>, <funcname>, <funcbody>]
-                (Term { lexeme }, _) if lexeme.tok_id() == lua5_3_l::T_FUNCTION => {
-                    self.compile_assignment(&stat_nodes[1], &stat_nodes[2], false);
-                }
-                // stat_nodes = [<varlist>, <eq>, <explist>]
-                (_, Term { lexeme }) if lexeme.tok_id() == lua5_3_l::T_EQ => {
-                    self.compile_assignment(&stat_nodes[0], &stat_nodes[2], false);
-                }
+                } if ridx == lua5_3_y::R_FUNCTIONCALL => self.compile_call(&nodes[0], &nodes[1]),
                 _ => {}
             }
         }
@@ -309,6 +320,11 @@ impl<'a> LuaToIR<'a> {
                 }
             }
         }
+    }
+
+    fn compile_call(&mut self, func: &Node<u8>, _params: &Node<u8>) {
+        let func_reg = self.compile_expr(find_term(func, lua5_3_l::T_NAME).unwrap());
+        self.functions[self.curr_function].push_instr(HLInstr(Opcode::CALL, func_reg, 0, 0));
     }
 
     /// Get the appropriate instruction for a given Node::Term.
@@ -512,6 +528,32 @@ mod tests {
                 HLInstr(Opcode::CLOSURE, 1, 0, 0),
                 HLInstr(Opcode::LDS, 2, 1, 0),
                 HLInstr(Opcode::SetAttr, 0, 2, 1),
+            ],
+            vec![
+                HLInstr(Opcode::LDI, 1, 0, 0),
+                HLInstr(Opcode::LDS, 2, 0, 0),
+                HLInstr(Opcode::SetAttr, 0, 2, 1),
+            ],
+        ];
+        for i in 0..ir.functions.len() {
+            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+        }
+    }
+
+    #[test]
+    fn generate_call() {
+        let pt =
+            &LuaParseTree::from_str(String::from("function f()\n\tx = 3\nend\nf()\nf()")).unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                HLInstr(Opcode::CLOSURE, 1, 0, 0),
+                HLInstr(Opcode::LDS, 2, 1, 0),
+                HLInstr(Opcode::SetAttr, 0, 2, 1),
+                HLInstr(Opcode::GetAttr, 3, 0, 2),
+                HLInstr(Opcode::CALL, 3, 0, 0),
+                HLInstr(Opcode::GetAttr, 4, 0, 2),
+                HLInstr(Opcode::CALL, 4, 0, 0),
             ],
             vec![
                 HLInstr(Opcode::LDI, 1, 0, 0),
