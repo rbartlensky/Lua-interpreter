@@ -22,6 +22,11 @@ pub trait LuaObj {
     fn get_string_ref(&self) -> Option<&str> {
         None
     }
+    /// If the underlying type is a String, then this method returns the String's index
+    /// in the constant table.
+    fn get_constant_index(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// Boxes the given `LuaObj`, and returns the address of the box.
@@ -101,11 +106,16 @@ impl LuaObj for LuaFloat {
 
 pub struct LuaString {
     pub v: String,
+    /// The index of the string in the constant table.
+    pub const_index: Option<usize>,
 }
 
 impl LuaObj for LuaString {
     fn clone_box(&self) -> Box<LuaObj> {
-        Box::new(LuaString { v: self.v.clone() })
+        Box::new(LuaString {
+            v: self.v.clone(),
+            const_index: self.const_index,
+        })
     }
 
     fn is_number(&self) -> bool {
@@ -134,5 +144,9 @@ impl LuaObj for LuaString {
 
     fn get_string_ref(&self) -> Option<&str> {
         Some(&self.v)
+    }
+
+    fn get_constant_index(&self) -> Option<usize> {
+        self.const_index
     }
 }

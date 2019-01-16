@@ -1,5 +1,8 @@
 use std::{collections::HashMap, vec::Vec};
 
+/// The register in which `_ENV` lives.
+pub const ENV_REG: usize = 0;
+
 /// Represents a tuple which is used to specify the lifetime of a register.
 /// For example if a register is first used by the 4th instruction of the bytecode, and
 /// used last by the 7th instruction, the register's lifetime would be (4, 8).
@@ -40,8 +43,7 @@ pub struct RegisterMap<'a> {
 impl<'a> RegisterMap<'a> {
     pub fn new() -> RegisterMap<'a> {
         RegisterMap {
-            lifetimes: vec![],
-            // the first map holds the variables of the module
+            lifetimes: vec![Lifetime::new(0)], // env's lifetime will be [0, 1)
             reg_maps: vec![HashMap::new()],
         }
     }
@@ -72,27 +74,27 @@ impl<'a> RegisterMap<'a> {
     }
 
     /// Get the register of <name>.
-    pub fn get_reg(&mut self, name: &'a str) -> usize {
+    pub fn get_reg(&mut self, name: &'a str) -> Option<usize> {
         let lifetimes = &mut self.lifetimes;
-        for map in self.reg_maps[1..].iter().rev() {
+        for map in self.reg_maps.iter().rev() {
             if let Some(&reg) = map.get(name) {
-                return reg;
+                let len = lifetimes.len();
+                lifetimes[reg].set_end_point(len + 1);
+                return Some(reg);
             }
         }
-        // In lua, if a variable is queried, but isn't in scope, a Nil is returned instead
-        // If none of the maps have a definition for <name> that means we have to define
-        // it ourselves in the map of the module (the first map in <reg_maps>).
-        *self.reg_maps[0]
-            .entry(name)
-            .and_modify(|reg| {
-                let len = lifetimes.len();
-                lifetimes[*reg].set_end_point(len + 1);
-            })
-            .or_insert_with(|| {
-                let lifetime = Lifetime::new(lifetimes.len());
-                lifetimes.push(lifetime);
-                lifetimes.len() - 1
-            })
+        // If we cannot find <name> in any of the maps, that means it is a global, and we
+        // will return a None, indicating to the compiler that it needs to generate
+        // instructions that will load <name> from `_ENV`
+        // Users can also reference _ENV, in which case we want to update _ENVs lifetime
+        // and return the register of _ENV (which is always 0)
+        if name == "_ENV" {
+            let len = lifetimes.len();
+            lifetimes[ENV_REG].set_end_point(len + 1);
+            Some(ENV_REG)
+        } else {
+            None
+        }
     }
 
     /// Set the register of <name> to <reg>.
@@ -118,38 +120,37 @@ mod tests {
     fn new_reg_correctly_increments_counter() {
         let mut rm = RegisterMap::new();
         for i in 0..10 {
-            assert_eq!(rm.get_new_reg(), i);
+            assert_eq!(rm.get_new_reg(), i + 1);
         }
-        assert_eq!(rm.reg_count(), 10);
+        assert_eq!(rm.reg_count(), 11);
     }
 
     #[test]
     fn correctly_maps_strings_to_registers() {
         let mut rm = RegisterMap::new();
         // create a new register
-        assert_eq!(rm.get_new_reg(), 0);
+        assert_eq!(rm.get_new_reg(), 1);
         // create a mapping
-        assert_eq!(rm.create_reg("foo"), 1);
-        assert_eq!(*rm.reg_maps[0].get("foo").unwrap(), 1);
-        assert_eq!(rm.get_reg("foo"), 1);
-        assert_eq!(*rm.reg_maps[0].get("foo").unwrap(), 1);
-        assert_eq!(rm.get_reg("bar"), 2);
-        assert_eq!(*rm.reg_maps[0].get("bar").unwrap(), 2);
+        assert_eq!(rm.create_reg("foo"), 2);
+        assert_eq!(*rm.reg_maps[0].get("foo").unwrap(), 2);
+        assert_eq!(rm.get_reg("foo"), Some(2));
+        assert_eq!(*rm.reg_maps[0].get("foo").unwrap(), 2);
+        assert_eq!(rm.get_reg("bar"), None);
+        assert!(rm.reg_maps[0].get("bar").is_none());
         // create a new scope in which we define another foo
         rm.push_scope();
         assert_eq!(rm.create_reg("foo"), 3);
         assert_eq!(*rm.reg_maps[1].get("foo").unwrap(), 3);
-        assert_eq!(rm.get_reg("foo"), 3);
+        assert_eq!(rm.get_reg("foo"), Some(3));
         assert_eq!(*rm.reg_maps[1].get("foo").unwrap(), 3);
-        assert_eq!(rm.get_reg("bar"), 2);
-        assert_eq!(*rm.reg_maps[0].get("bar").unwrap(), 2);
+        assert_eq!(rm.get_reg("bar"), None);
         assert!(rm.reg_maps[1].get("bar").is_none());
         rm.pop_scope();
         // pop the scope and query foo and bar again to check if they have the same values
-        assert_eq!(rm.get_reg("foo"), 1);
-        assert_eq!(*rm.reg_maps[0].get("foo").unwrap(), 1);
-        assert_eq!(rm.get_reg("bar"), 2);
-        assert_eq!(*rm.reg_maps[0].get("bar").unwrap(), 2);
+        assert_eq!(rm.get_reg("foo"), Some(2));
+        assert_eq!(*rm.reg_maps[0].get("foo").unwrap(), 2);
+        assert!(rm.get_reg("bar").is_none());
+        assert!(rm.reg_maps[0].get("bar").is_none());
         // test total number of registers created
         assert_eq!(rm.reg_count(), 4);
     }
@@ -158,20 +159,20 @@ mod tests {
     fn lifetimes_are_correcly_updated() {
         let mut rm = RegisterMap::new();
         let reg1 = rm.get_new_reg();
-        assert_eq!(rm.lifetimes[reg1].0, 0);
-        assert_eq!(rm.lifetimes[reg1].1, 1);
+        assert_eq!(rm.lifetimes[reg1].0, 1);
+        assert_eq!(rm.lifetimes[reg1].1, 2);
         let reg2 = rm.create_reg("reg");
-        assert_eq!(rm.lifetimes[reg2].0, 1);
-        assert_eq!(rm.lifetimes[reg2].1, 2);
-        rm.get_reg("reg");
-        assert_eq!(rm.lifetimes[reg2].0, 1);
+        assert_eq!(rm.lifetimes[reg2].0, 2);
         assert_eq!(rm.lifetimes[reg2].1, 3);
+        rm.get_reg("reg");
+        assert_eq!(rm.lifetimes[reg2].0, 2);
+        assert_eq!(rm.lifetimes[reg2].1, 4);
         rm.push_scope();
         let reg3 = rm.create_reg("reg3");
         rm.pop_scope();
-        assert_eq!(rm.lifetimes[reg3].0, 2);
-        assert_eq!(rm.lifetimes[reg3].1, 3);
-        assert_eq!(rm.reg_count(), 3);
+        assert_eq!(rm.lifetimes[reg3].0, 3);
+        assert_eq!(rm.lifetimes[reg3].1, 4);
+        assert_eq!(rm.reg_count(), 4);
     }
 
     #[test]
@@ -182,7 +183,7 @@ mod tests {
             rm.create_reg("foo");
         }
         for i in 0..3 {
-            assert_eq!(rm.get_reg("foo"), 2 - i);
+            assert_eq!(rm.get_reg("foo"), Some(3 - i));
             rm.pop_scope();
         }
     }

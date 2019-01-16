@@ -13,10 +13,9 @@ name = "luacompiler"
 path = "src/lib/mod.rs"
 
 [dependencies]
-cfgrammar = { git="https://github.com/softdevteam/grmtools" }
-lrlex = { git="https://github.com/softdevteam/grmtools" }
-lrpar = { git="https://github.com/softdevteam/grmtools" }
-lrtable = { git="https://github.com/softdevteam/grmtools" }
+cfgrammar = "0.2"
+lrlex = "0.2"
+lrpar = "0.2"
 bincode = "1.0.1"
 serde = "1.0.80"
 serde_derive = "1.0"
@@ -26,5 +25,6 @@ version = "2.32"
 default-features = false
 
 [build-dependencies]
-lrpar = { git="https://github.com/softdevteam/grmtools" }
-lrlex = { git="https://github.com/softdevteam/grmtools" }
+cfgrammar = "0.2"
+lrlex = "0.2"
+lrpar = "0.2"

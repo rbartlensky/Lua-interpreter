@@ -3,7 +3,6 @@ extern crate cfgrammar;
 extern crate lrlex;
 #[macro_use]
 extern crate lrpar;
-extern crate lrtable;
 #[macro_use]
 extern crate serde_derive;
 extern crate bincode;

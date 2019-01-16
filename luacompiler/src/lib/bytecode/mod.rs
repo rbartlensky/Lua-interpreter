@@ -74,6 +74,11 @@ impl LuaBytecode {
         &self.strings[i as usize]
     }
 
+    /// Gets the size of the string constant table.
+    pub fn get_strings_len(&self) -> usize {
+        self.strings.len()
+    }
+
     /// Serialize the bytecode to a file using bincode.
     pub fn serialize_to_file(&self, file: &str) -> io::Result<()> {
         let mut f = File::create(file)?;

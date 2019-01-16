@@ -46,17 +46,19 @@ impl HLInstr {
 /// refer to at most 256 constants.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Opcode {
-    MOV = 0,  // R(1) = R(2)
-    LDI = 1,  // R(1) = I(1); load integer from the constant table
-    LDF = 2,  // R(1) = F(1); load float from the constant table
-    LDS = 3,  // R(1) = S(1); load string from the constant table
-    ADD = 4,  // R(1) = R(2) + R(3)
-    SUB = 5,  // R(1) = R(2) - R(3)
-    MUL = 6,  // R(1) = R(2) * R(3)
-    DIV = 7,  // R(1) = R(2) / R(3)
-    MOD = 8,  // R(1) = R(2) % R(3)
-    FDIV = 9, // R(1) = R(2) // R(3)
-    EXP = 10, // R(1) = R(2) ^ R(3)
+    MOV = 0,      // R(1) = R(2)
+    LDI = 1,      // R(1) = I(1); load integer from the constant table
+    LDF = 2,      // R(1) = F(1); load float from the constant table
+    LDS = 3,      // R(1) = S(1); load string from the constant table
+    ADD = 4,      // R(1) = R(2) + R(3)
+    SUB = 5,      // R(1) = R(2) - R(3)
+    MUL = 6,      // R(1) = R(2) * R(3)
+    DIV = 7,      // R(1) = R(2) / R(3)
+    MOD = 8,      // R(1) = R(2) % R(3)
+    FDIV = 9,     // R(1) = R(2) // R(3)
+    EXP = 10,     // R(1) = R(2) ^ R(3)
+    GetAttr = 11, // R(1) = R(2)[R(3)]
+    SetAttr = 12, // R(1)[R(2)] = R(3)
 }
 
 #[cfg(test)]
