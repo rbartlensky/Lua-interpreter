@@ -25,9 +25,8 @@ pub fn compile_to_ir(pt: &LuaParseTree) -> LuaIR {
 /// The compiler assumes that the `_ENV` variable is always stored in register 0!
 struct LuaToIR<'a> {
     pt: &'a LuaParseTree,
-    reg_map: RegisterMap<'a>,
     const_map: ConstantsMap,
-    functions: Vec<CompiledFunc>,
+    functions: Vec<CompiledFunc<'a>>,
     curr_function: usize,
 }
 
@@ -35,7 +34,6 @@ impl<'a> LuaToIR<'a> {
     fn new(pt: &'a LuaParseTree) -> LuaToIR {
         LuaToIR {
             pt,
-            reg_map: RegisterMap::new(),
             const_map: ConstantsMap::new(),
             functions: vec![CompiledFunc::new(0)],
             curr_function: 0,
@@ -43,19 +41,22 @@ impl<'a> LuaToIR<'a> {
     }
 
     /// Compile and return the intermediate representation of the given lua parse tree.
-    pub fn to_lua_ir(mut self) -> LuaIR {
+    pub fn to_lua_ir(mut self) -> LuaIR<'a> {
         self.compile_block(&self.pt.tree);
-        self.functions[self.curr_function].set_lifetimes(self.reg_map.get_lifetimes());
         LuaIR::new(self.functions, self.curr_function, self.const_map)
+    }
+
+    fn curr_reg_map(&mut self) -> &mut RegisterMap<'a> {
+        self.functions[self.curr_function].mut_reg_map()
     }
 
     /// Compile a <block> without recursively compiling its <retstatopt> child.
     fn compile_block(&mut self, node: &Node<u8>) {
-        self.reg_map.push_scope();
+        self.curr_reg_map().push_scope();
         // nodes = [<statlistopt>, <retstatopt>]
         let nodes = get_nodes(node, lua5_3_y::R_BLOCK);
         self.compile_stat_list(&nodes[0]);
-        self.reg_map.pop_scope();
+        self.curr_reg_map().pop_scope();
     }
 
     /// Compile a <statlist> or a <statlistopt>.
@@ -108,9 +109,13 @@ impl<'a> LuaToIR<'a> {
                 _ => {}
             }
         } else {
-            // look for stat_nodes = [<varlist>, <eq>, <explist>]
-            match stat_nodes[1] {
-                Term { lexeme } if lexeme.tok_id() == lua5_3_l::T_EQ => {
+            match (&stat_nodes[0], &stat_nodes[1]) {
+                // stat_nodes = [<function>, <funcname>, <funcbody>]
+                (Term { lexeme }, _) if lexeme.tok_id() == lua5_3_l::T_FUNCTION => {
+                    self.compile_assignment(&stat_nodes[1], &stat_nodes[2], false);
+                }
+                // stat_nodes = [<varlist>, <eq>, <explist>]
+                (_, Term { lexeme }) if lexeme.tok_id() == lua5_3_l::T_EQ => {
                     self.compile_assignment(&stat_nodes[0], &stat_nodes[2], false);
                 }
                 _ => {}
@@ -131,13 +136,13 @@ impl<'a> LuaToIR<'a> {
         // if it is, then it is a local assignment (because `reg_map` only stores
         // mappings of local variable to registers), if it isn't then we have to look
         // it up in _ENV
-        if is_local_decl || self.reg_map.get_reg(name).is_some() {
+        if is_local_decl || self.curr_reg_map().get_reg(name).is_some() {
             // No new instructions were added, which means that <right> has already been
             // computed and stored in some register. Because we are compiling an
             // assignment, we will create a copy of this result and store it in <left>.
             // See test `load_string_multiple_times`.
             if self.functions[self.curr_function].instrs().len() == old_len {
-                let new_reg = self.reg_map.get_new_reg();
+                let new_reg = self.curr_reg_map().get_new_reg();
                 self.functions[self.curr_function].push_instr(HLInstr(
                     Opcode::MOV,
                     new_reg,
@@ -148,11 +153,11 @@ impl<'a> LuaToIR<'a> {
             }
             // if a variable is assigned a value multiple times, we have to make sure
             // that the map knows the new register which holds the new value
-            self.reg_map.set_reg(name, value);
+            self.curr_reg_map().set_reg(name, value);
         } else {
             // we would like to generate code for the following statement: _ENV[name] = value
             // load a reference to _ENV
-            let env_reg = self.reg_map.get_reg("_ENV").unwrap();
+            let env_reg = self.curr_reg_map().get_reg("_ENV").unwrap();
             // prepare the attribute for _ENV which is the name of the variable
             let name_index = self.const_map.get_str(name.to_string());
             let attr_reg = self.get_const_str_reg(name_index);
@@ -169,17 +174,17 @@ impl<'a> LuaToIR<'a> {
     /// If no register holds this value, then this method creates the necessary
     /// instruction to load the string.
     fn get_const_str_reg(&mut self, name_index: usize) -> usize {
-        match self.reg_map.get_str_reg(name_index) {
+        match self.curr_reg_map().get_str_reg(name_index) {
             Some(i) => i,
             None => {
-                let reg = self.reg_map.get_new_reg();
+                let reg = self.curr_reg_map().get_new_reg();
                 self.functions[self.curr_function].push_instr(HLInstr(
                     Opcode::LDS,
                     reg,
                     name_index,
                     0,
                 ));
-                self.reg_map.set_str_reg(name_index, reg);
+                self.curr_reg_map().set_str_reg(name_index, reg);
                 reg
             }
         }
@@ -203,6 +208,37 @@ impl<'a> LuaToIR<'a> {
     fn compile_expr(&mut self, node: &Node<u8>) -> usize {
         match *node {
             Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_FUNCBODY => {
+                let old_curr_function = self.curr_function;
+                // create a new compiledfunc for this function, and add it as a child
+                // of the enclosing function
+                let new_function_id = self.functions.len();
+                let (new_function, func_num) = {
+                    let mut curr_function = &mut self.functions[self.curr_function];
+                    curr_function.push_func(new_function_id);
+                    (
+                        CompiledFunc::new(new_function_id),
+                        curr_function.funcs_len() - 1,
+                    )
+                };
+                self.functions.push(new_function);
+                self.curr_function = new_function_id;
+                self.compile_block(&nodes[3]);
+                // restore the old state so that we can create a closure instruction
+                // in the outer function
+                self.curr_function = old_curr_function;
+                let reg = self.curr_reg_map().get_new_reg();
+                self.functions[self.curr_function].push_instr(HLInstr(
+                    Opcode::CLOSURE,
+                    reg,
+                    func_num,
+                    0,
+                ));
+                reg
+            }
+            Nonterm {
                 ridx: RIdx(_ridx),
                 ref nodes,
             } => {
@@ -212,7 +248,7 @@ impl<'a> LuaToIR<'a> {
                     debug_assert!(nodes.len() == 3);
                     let left = self.compile_expr(&nodes[0]);
                     let right = self.compile_expr(&nodes[2]);
-                    let new_var = self.reg_map.get_new_reg();
+                    let new_var = self.curr_reg_map().get_new_reg();
                     let instr = self.get_instr(&nodes[1], new_var, left, right);
                     self.functions[self.curr_function].push_instr(instr);
                     new_var
@@ -224,7 +260,7 @@ impl<'a> LuaToIR<'a> {
                     .get_string(lexeme.start(), lexeme.end().unwrap_or(lexeme.start()));
                 match lexeme.tok_id() {
                     lua5_3_l::T_NUMERAL => {
-                        let reg = self.reg_map.get_new_reg();
+                        let reg = self.curr_reg_map().get_new_reg();
                         if value.contains(".") {
                             let fl = self.const_map.get_float(value.to_string());
                             self.functions[self.curr_function].push_instr(HLInstr(
@@ -253,11 +289,11 @@ impl<'a> LuaToIR<'a> {
                     lua5_3_l::T_NAME => {
                         // if the variable is in a register, then we can return reg number
                         // otherwise we have to generate code for `_ENV[<name>]`
-                        self.reg_map.get_reg(value).unwrap_or_else(|| {
-                            let env_reg = self.reg_map.get_reg("_ENV").unwrap();
+                        self.curr_reg_map().get_reg(value).unwrap_or_else(|| {
+                            let env_reg = self.curr_reg_map().get_reg("_ENV").unwrap();
                             let name_index = self.const_map.get_str(value.to_string());
                             let attr_reg = self.get_const_str_reg(name_index);
-                            let reg = self.reg_map.get_new_reg();
+                            let reg = self.curr_reg_map().get_new_reg();
                             self.functions[self.curr_function].push_instr(HLInstr(
                                 Opcode::GetAttr,
                                 reg,
@@ -310,8 +346,8 @@ mod tests {
 
     #[test]
     fn correctness_of_ssa_ir() {
-        let pt = LuaParseTree::from_str(String::from("x = 1 + 2 * 3 / 2 ^ 2.0 // 1 - 2"));
-        let ir = compile_to_ir(&pt.unwrap());
+        let pt = &LuaParseTree::from_str(String::from("x = 1 + 2 * 3 / 2 ^ 2.0 // 1 - 2")).unwrap();
+        let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDI, 1, 0, 0),
             HLInstr(Opcode::LDI, 2, 1, 0),
@@ -377,8 +413,8 @@ mod tests {
 
     #[test]
     fn correctness_of_ssa_ir2() {
-        let pt = LuaParseTree::from_str(String::from("x = 1\ny = x"));
-        let ir = compile_to_ir(&pt.unwrap());
+        let pt = &LuaParseTree::from_str(String::from("x = 1\ny = x")).unwrap();
+        let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDI, 1, 0, 0),     // R(1) = INT(0) == 1
             HLInstr(Opcode::LDS, 2, 0, 0),     // R(2) = STR(0) == "x"
@@ -421,8 +457,8 @@ mod tests {
 
     #[test]
     fn generates_get_attr_instr() {
-        let pt = LuaParseTree::from_str(String::from("x = y"));
-        let ir = compile_to_ir(&pt.unwrap());
+        let pt = &LuaParseTree::from_str(String::from("x = y")).unwrap();
+        let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDS, 1, 0, 0),
             HLInstr(Opcode::GetAttr, 2, 0, 1),
@@ -435,8 +471,8 @@ mod tests {
 
     #[test]
     fn locals_and_globals() {
-        let pt = LuaParseTree::from_str(String::from("local x = 2\ny = x"));
-        let ir = compile_to_ir(&pt.unwrap());
+        let pt = &LuaParseTree::from_str(String::from("local x = 2\ny = x")).unwrap();
+        let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDI, 1, 0, 0),
             HLInstr(Opcode::LDS, 2, 0, 0),
@@ -448,13 +484,13 @@ mod tests {
 
     #[test]
     fn load_string_multiple_times() {
-        let pt = LuaParseTree::from_str(String::from("local x = \"1\"\nlocal y = \"1\""));
-        let ir = compile_to_ir(&pt.unwrap());
+        let pt = &LuaParseTree::from_str(String::from("local x = \"1\"\nlocal y = \"1\"")).unwrap();
+        let ir = compile_to_ir(pt);
         let expected_instrs = vec![HLInstr(Opcode::LDS, 1, 0, 0), HLInstr(Opcode::MOV, 2, 1, 0)];
         let function = &ir.functions[ir.main_func];
         check_eq(function.instrs(), &expected_instrs);
-        let pt = LuaParseTree::from_str(String::from("x = \"1\"\ny = \"x\""));
-        let ir = compile_to_ir(&pt.unwrap());
+        let pt = &LuaParseTree::from_str(String::from("x = \"1\"\ny = \"x\"")).unwrap();
+        let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDS, 1, 0, 0),     // R(1) = "1"
             HLInstr(Opcode::LDS, 2, 1, 0),     // R(2) = "x"
@@ -465,5 +501,26 @@ mod tests {
         ];
         let function = &ir.functions[ir.main_func];
         check_eq(function.instrs(), &expected_instrs);
+    }
+
+    #[test]
+    fn generate_closure() {
+        let pt = &LuaParseTree::from_str(String::from("function f()\n\tx = 3\nend")).unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                HLInstr(Opcode::CLOSURE, 1, 0, 0),
+                HLInstr(Opcode::LDS, 2, 1, 0),
+                HLInstr(Opcode::SetAttr, 0, 2, 1),
+            ],
+            vec![
+                HLInstr(Opcode::LDI, 1, 0, 0),
+                HLInstr(Opcode::LDS, 2, 0, 0),
+                HLInstr(Opcode::SetAttr, 0, 2, 1),
+            ],
+        ];
+        for i in 0..ir.functions.len() {
+            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+        }
     }
 }

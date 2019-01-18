@@ -1,23 +1,22 @@
 use bytecode::instructions::HLInstr;
-use irgen::register_map::Lifetime;
+use irgen::register_map::{Lifetime, RegisterMap};
 
 /// Represents a compiled function in Lua.
-#[derive(Debug)]
-pub struct CompiledFunc {
+pub struct CompiledFunc<'a> {
     index: usize,
     functions: Vec<usize>,
-    lifetimes: Vec<Lifetime>,
     instrs: Vec<HLInstr>,
+    reg_map: RegisterMap<'a>,
 }
 
-impl CompiledFunc {
+impl<'a> CompiledFunc<'a> {
     /// Create a new empty function with the given index.
-    pub fn new(index: usize) -> CompiledFunc {
+    pub fn new(index: usize) -> CompiledFunc<'a> {
         CompiledFunc {
             index,
             functions: vec![],
-            lifetimes: vec![],
             instrs: vec![],
+            reg_map: RegisterMap::new(),
         }
     }
 
@@ -30,13 +29,8 @@ impl CompiledFunc {
         self.functions.push(i);
     }
 
-    /// Get the lifetimes of the registers of this function.
-    pub fn lifetimes(&self) -> &Vec<Lifetime> {
-        &self.lifetimes
-    }
-
-    pub fn set_lifetimes(&mut self, lifetimes: Vec<Lifetime>) {
-        self.lifetimes = lifetimes;
+    pub fn funcs_len(&self) -> usize {
+        self.functions.len()
     }
 
     /// Add an instruction to this function.
@@ -47,6 +41,18 @@ impl CompiledFunc {
     /// Get a reference to all the instructions of this function.
     pub fn instrs(&self) -> &Vec<HLInstr> {
         &self.instrs
+    }
+
+    pub fn reg_map(&self) -> &RegisterMap<'a> {
+        &self.reg_map
+    }
+
+    pub fn mut_reg_map(&mut self) -> &mut RegisterMap<'a> {
+        &mut self.reg_map
+    }
+
+    pub fn lifetimes(&self) -> &Vec<Lifetime> {
+        self.reg_map.lifetimes()
     }
 
     pub(crate) fn extract_functions(self) -> Vec<usize> {

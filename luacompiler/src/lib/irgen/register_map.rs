@@ -107,12 +107,8 @@ impl<'a> RegisterMap<'a> {
     }
 
     /// Get the total number of registers that were needed.
-    pub fn reg_count(self) -> usize {
+    pub fn reg_count(&self) -> usize {
         self.lifetimes.len()
-    }
-
-    pub(crate) fn get_lifetimes(self) -> Vec<Lifetime> {
-        self.lifetimes
     }
 
     /// Set the register of the string at index <index> to <reg>.
@@ -131,6 +127,10 @@ impl<'a> RegisterMap<'a> {
             }
         }
         None
+    }
+
+    pub fn lifetimes(&self) -> &Vec<Lifetime> {
+        &self.lifetimes
     }
 }
 

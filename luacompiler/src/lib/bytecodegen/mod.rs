@@ -5,11 +5,11 @@ pub fn compile_to_bytecode(ir: LuaIR) -> LuaBytecode {
     LuaIRToLuaBc::new(ir).compile()
 }
 
-struct LuaIRToLuaBc {
-    ir: LuaIR,
+struct LuaIRToLuaBc<'a> {
+    ir: LuaIR<'a>,
 }
 
-impl LuaIRToLuaBc {
+impl<'a> LuaIRToLuaBc<'a> {
     /// Compile the given LuaIR to LuaBytecode.
     fn new(ir: LuaIR) -> LuaIRToLuaBc {
         LuaIRToLuaBc { ir }
@@ -17,7 +17,7 @@ impl LuaIRToLuaBc {
 
     fn compile(self) -> LuaBytecode {
         let functions = self.ir.functions;
-        assert!(functions[self.ir.main_func].lifetimes().len() < 256);
+        assert!(functions[self.ir.main_func].reg_map().reg_count() < 256);
         LuaBytecode::new(
             functions.into_iter().map(|i| Function::from(i)).collect(),
             self.ir.main_func,
