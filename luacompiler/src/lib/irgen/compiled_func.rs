@@ -7,6 +7,7 @@ pub struct CompiledFunc<'a> {
     functions: Vec<usize>,
     instrs: Vec<HLInstr>,
     reg_map: RegisterMap<'a>,
+    param_count: usize,
 }
 
 impl<'a> CompiledFunc<'a> {
@@ -17,6 +18,7 @@ impl<'a> CompiledFunc<'a> {
             functions: vec![],
             instrs: vec![],
             reg_map: RegisterMap::new(),
+            param_count: 0,
         }
     }
 
@@ -57,5 +59,13 @@ impl<'a> CompiledFunc<'a> {
 
     pub(crate) fn extract_functions(self) -> Vec<usize> {
         self.functions
+    }
+
+    pub fn param_count(&self) -> usize {
+        self.param_count
+    }
+
+    pub fn set_param_count(&mut self, count: usize) {
+        self.param_count = count;
     }
 }

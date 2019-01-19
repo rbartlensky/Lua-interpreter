@@ -25,6 +25,7 @@ fn main() {
         Ok(ref pt) => {
             let ir = compile_to_ir(&pt);
             let bc = compile_to_bytecode(ir);
+            println!("{}", bc);
             // create a luabc file next to the input file
             let mut path = PathBuf::from(file);
             path.set_extension("luabc");
