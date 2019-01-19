@@ -53,10 +53,16 @@ impl<'a> LuaToIR<'a> {
     /// Compile a <block> without recursively compiling its <retstatopt> child.
     fn compile_block(&mut self, node: &Node<u8>) {
         self.curr_reg_map().push_scope();
+        self.compile_block_without_scope(node);
+        self.curr_reg_map().pop_scope();
+    }
+
+    /// Compiles a block in the current scope. This means that the user must
+    /// manully push/pop a new scope, if necessary.
+    fn compile_block_without_scope(&mut self, node: &Node<u8>) {
         // nodes = [<statlistopt>, <retstatopt>]
         let nodes = get_nodes(node, lua5_3_y::R_BLOCK);
         self.compile_stat_list(&nodes[0]);
-        self.curr_reg_map().pop_scope();
     }
 
     /// Compile a <statlist> or a <statlistopt>.
@@ -236,7 +242,11 @@ impl<'a> LuaToIR<'a> {
                 };
                 self.functions.push(new_function);
                 self.curr_function = new_function_id;
-                self.compile_block(&nodes[3]);
+                self.curr_reg_map().push_scope();
+                // make the first N registers point to the first N parameters
+                self.compile_param_list(&nodes[1]);
+                self.compile_block_without_scope(&nodes[3]);
+                self.curr_reg_map().pop_scope();
                 // restore the old state so that we can create a closure instruction
                 // in the outer function
                 self.curr_function = old_curr_function;
@@ -322,9 +332,115 @@ impl<'a> LuaToIR<'a> {
         }
     }
 
-    fn compile_call(&mut self, func: &Node<u8>, _params: &Node<u8>) {
+    /// Compile an <explist> or <explistopt> and return the registers in which the
+    /// result of each expression is stored.
+    fn compile_exprs(&mut self, exprs: &Node<u8>) -> Vec<usize> {
+        match *exprs {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_EXPLIST => {
+                let mut regs = vec![];
+                // nodes = <exp>
+                if nodes.len() == 1 {
+                    regs.push(self.compile_expr(&nodes[0]));
+                } else {
+                    // nodes = [<explist>, <COMMA>,  <exp>]
+                    regs.extend(self.compile_exprs(&nodes[0]));
+                    regs.push(self.compile_expr(&nodes[2]));
+                }
+                regs
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_EXPLISTOPT => {
+                // nodes = <explist>
+                if nodes.len() > 0 {
+                    self.compile_exprs(&nodes[0])
+                } else {
+                    vec![]
+                }
+            }
+            _ => panic!("Root node was not an <explist> or <explistopt>"),
+        }
+    }
+
+    /// Compile a <namelist> into a vector of names.
+    fn compile_namelist(&mut self, names: &Node<u8>) -> Vec<&'a str> {
+        match *names {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_NAMELIST => {
+                let mut names = vec![];
+                // nodes = <NAME>
+                if nodes.len() == 1 {
+                    names.push(self.compile_variable(&nodes[0]));
+                } else {
+                    // nodes = [<namelist>, <COMMA>, <NAME>]
+                    names.extend(self.compile_namelist(&nodes[0]));
+                    names.push(self.compile_variable(&nodes[2]));
+                }
+                names
+            }
+            _ => panic!("Root node is not a <namelist>"),
+        }
+    }
+
+    /// Compile a <parlist> node, and assign each name a register in the current
+    /// register map.
+    /// The first parameter of a function is assigned to register 1, and so on.
+    /// For now the vararg parameter is ignored.
+    fn compile_param_list(&mut self, params: &Node<u8>) {
+        match *params {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_PARLIST => {
+                let len = nodes.len();
+                if len == 0 {
+                    return;
+                }
+                let mut names = vec![];
+                // nodes = [<parlist>, <COMMA>, <...>]
+                if len == 3 {
+                    names.extend(self.compile_namelist(&nodes[0]));
+                } else {
+                    // either nodes = <...> or <parlist>
+                    match nodes[0] {
+                        Term { lexeme: _ } => {}
+                        _ => names.extend(self.compile_namelist(&nodes[0])),
+                    }
+                }
+                self.functions[self.curr_function].set_param_count(names.len());
+                let mut reg_map = self.curr_reg_map();
+                for name in names {
+                    reg_map.create_reg(name);
+                }
+            }
+            _ => panic!("Root node was not a <parlist>"),
+        }
+    }
+
+    /// Compile a <functioncall>.
+    fn compile_call(&mut self, func: &Node<u8>, params: &Node<u8>) {
         let func_reg = self.compile_expr(find_term(func, lua5_3_l::T_NAME).unwrap());
-        self.functions[self.curr_function].push_instr(HLInstr(Opcode::CALL, func_reg, 0, 0));
+        let params = match *params {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_ARGS => &nodes[1],
+            _ => panic!("Missing node <args> from <functioncall>"),
+        };
+        let compiled_exprs = self.compile_exprs(params);
+        let func = &mut self.functions[self.curr_function];
+        // push the arguments to the function
+        for reg in &compiled_exprs {
+            func.push_instr(HLInstr(Opcode::PUSH, *reg, 0, 0));
+        }
+        // call the function, but also specify how many arguments it should expect
+        func.push_instr(HLInstr(Opcode::CALL, func_reg, compiled_exprs.len(), 0));
     }
 
     /// Get the appropriate instruction for a given Node::Term.
@@ -584,6 +700,42 @@ mod tests {
             ],
             vec![
                 HLInstr(Opcode::LDI, 1, 0, 0),
+                HLInstr(Opcode::LDS, 2, 0, 0),
+                HLInstr(Opcode::SetAttr, 0, 2, 1),
+            ],
+        ];
+        for i in 0..ir.functions.len() {
+            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+        }
+    }
+
+    #[test]
+    fn generate_functions_with_args() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "function f(a)
+                 x = a
+             end
+             f(2)
+             f(x)",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                HLInstr(Opcode::CLOSURE, 1, 0, 0),
+                HLInstr(Opcode::LDS, 2, 1, 0),
+                HLInstr(Opcode::SetAttr, 0, 2, 1),
+                HLInstr(Opcode::GetAttr, 3, 0, 2),
+                HLInstr(Opcode::LDI, 4, 0, 0),
+                HLInstr(Opcode::PUSH, 4, 0, 0),
+                HLInstr(Opcode::CALL, 3, 1, 0),
+                HLInstr(Opcode::GetAttr, 5, 0, 2),
+                HLInstr(Opcode::LDS, 6, 0, 0),
+                HLInstr(Opcode::GetAttr, 7, 0, 6),
+                HLInstr(Opcode::PUSH, 7, 0, 0),
+                HLInstr(Opcode::CALL, 5, 1, 0),
+            ],
+            vec![
                 HLInstr(Opcode::LDS, 2, 0, 0),
                 HLInstr(Opcode::SetAttr, 0, 2, 1),
             ],

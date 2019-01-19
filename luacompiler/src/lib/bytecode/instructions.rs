@@ -42,6 +42,7 @@ pub fn format_instr(instr: u32) -> String {
         12 => "SetAttr",
         13 => "Closure",
         14 => "Call",
+        15 => "Push",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(
@@ -88,7 +89,8 @@ pub enum Opcode {
     GetAttr = 11, // R(1) = R(2)[R(3)]
     SetAttr = 12, // R(1)[R(2)] = R(3)
     CLOSURE = 13, // R(1) = Closure(R(2))
-    CALL = 14,    // call R(1)
+    CALL = 14,    // call R(1) with R(2) arguments
+    PUSH = 15,    // Push R(1) to the stack
 }
 
 #[cfg(test)]
