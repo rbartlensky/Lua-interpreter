@@ -6,7 +6,7 @@ pub const ENV_REG: usize = 0;
 /// Represents a tuple which is used to specify the lifetime of a register.
 /// For example if a register is first used by the 4th instruction of the bytecode, and
 /// used last by the 7th instruction, the register's lifetime would be (4, 8).
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Lifetime(usize, usize);
 
 impl Lifetime {

@@ -37,7 +37,9 @@ pub struct Vm {
 impl Vm {
     /// Create a new interpreter for the given bytecode.
     pub fn new(bytecode: LuaBytecode) -> Vm {
-        let regs = bytecode.reg_count();
+        let regs = bytecode
+            .get_function(bytecode.get_main_function())
+            .reg_count();
         let mut registers: Vec<LuaVal> = Vec::with_capacity(regs as usize);
         registers.push(LuaVal::from(LuaTable::new(HashMap::new())));
         for _ in 1..regs {
@@ -55,9 +57,15 @@ impl Vm {
     /// Evaluate the program.
     pub fn eval(&mut self) {
         let mut pc = 0;
-        let len = self.bytecode.instrs_len();
+        let len = self
+            .bytecode
+            .get_function(self.bytecode.get_main_function())
+            .instrs_len();
         while pc < len {
-            let instr = self.bytecode.get_instr(pc);
+            let instr = self
+                .bytecode
+                .get_function(self.bytecode.get_main_function())
+                .get_instr(pc);
             (OPCODE_HANDLER[opcode(instr) as usize])(self, instr).unwrap();
             pc += 1;
         }

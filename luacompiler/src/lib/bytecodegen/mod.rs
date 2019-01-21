@@ -1,4 +1,4 @@
-use bytecode::LuaBytecode;
+use bytecode::{Function, LuaBytecode};
 use irgen::lua_ir::LuaIR;
 
 pub fn compile_to_bytecode(ir: LuaIR) -> LuaBytecode {
@@ -16,11 +16,12 @@ impl LuaIRToLuaBc {
     }
 
     fn compile(self) -> LuaBytecode {
-        assert!(self.ir.lifetimes.len() < 256);
+        let functions = self.ir.functions;
+        assert!(functions[self.ir.main_func].lifetimes().len() < 256);
         LuaBytecode::new(
-            self.ir.instrs.iter().map(|i| i.as_32bit()).collect(),
+            functions.into_iter().map(|i| Function::from(i)).collect(),
+            self.ir.main_func,
             self.ir.const_map,
-            self.ir.lifetimes.len() as u8,
         )
     }
 }

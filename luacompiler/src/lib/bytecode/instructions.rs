@@ -25,10 +25,36 @@ pub fn make_instr(opcode: Opcode, arg1: u8, arg2: u8, arg3: u8) -> u32 {
     opcode as u32 + ((arg1 as u32) << 8) + ((arg2 as u32) << 16) + ((arg3 as u32) << 24)
 }
 
+pub fn format_instr(instr: u32) -> String {
+    let i = match opcode(instr) {
+        0 => "Mov",
+        1 => "Ldi",
+        2 => "Ldf",
+        3 => "Lds",
+        4 => "Add",
+        5 => "Sub",
+        6 => "Mul",
+        7 => "Div",
+        8 => "Mod",
+        9 => "FDiv",
+        10 => "Exp",
+        11 => "GetAttr",
+        12 => "SetAttr",
+        _ => unreachable!("No such opcode: {}", opcode(instr)),
+    };
+    format!(
+        "{} {} {} {}",
+        i,
+        first_arg(instr),
+        second_arg(instr),
+        third_arg(instr)
+    )
+}
+
 /// Represents a high level instruction whose operands have a size of usize.
 /// This is used by the frontend to create an SSA IR, which later gets translated
 /// into smaller instructions that fit in 32 bits.
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub struct HLInstr(pub Opcode, pub usize, pub usize, pub usize);
 
 impl HLInstr {
