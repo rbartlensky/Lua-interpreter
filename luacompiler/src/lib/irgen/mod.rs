@@ -2,7 +2,9 @@ pub mod compiled_func;
 pub mod constants_map;
 pub mod lua_ir;
 pub mod register_map;
+mod utils;
 
+use self::utils::{find_term, get_nodes, is_term};
 use self::{
     compiled_func::CompiledFunc, constants_map::ConstantsMap, lua_ir::LuaIR,
     register_map::RegisterMap,
@@ -40,42 +42,51 @@ impl<'a> LuaToIR<'a> {
         }
     }
 
-    // Compile and return the intermediate representation of the given lua parse tree.
+    /// Compile and return the intermediate representation of the given lua parse tree.
     pub fn to_lua_ir(mut self) -> LuaIR {
-        self.compile(&self.pt.tree);
+        self.compile_block(&self.pt.tree);
         self.functions[self.curr_function].set_lifetimes(self.reg_map.get_lifetimes());
         LuaIR::new(self.functions, self.curr_function, self.const_map)
     }
 
-    /// Compile the parse tree.
-    fn compile(&mut self, node: &Node<u8>) {
-        let mut pt_nodes = vec![node];
-        while !pt_nodes.is_empty() {
-            let node = pt_nodes.pop().unwrap();
-            match *node {
-                Nonterm {
-                    ridx: RIdx(ridx),
-                    ref nodes,
-                } if ridx == lua5_3_y::R_STAT => {
-                    self.compile_stat(nodes);
-                }
-                Nonterm { ridx: _, ref nodes } => {
-                    for i in (0..nodes.len()).rev() {
-                        pt_nodes.push(&nodes[i]);
-                    }
-                }
-                _ => {
-                    continue;
-                }
-            }
-        }
+    /// Compile a <block> without recursively compiling its <retstatopt> child.
+    fn compile_block(&mut self, node: &Node<u8>) {
+        self.reg_map.push_scope();
+        // nodes = [<statlistopt>, <retstatopt>]
+        let nodes = get_nodes(node, lua5_3_y::R_BLOCK);
+        self.compile_stat_list(&nodes[0]);
+        self.reg_map.pop_scope();
     }
 
-    /// Check if <node> is a 'local' term.
-    fn is_local(node: &Node<u8>) -> bool {
-        match node {
-            Term { lexeme } if lexeme.tok_id() == lua5_3_l::T_LOCAL => true,
-            _ => false,
+    /// Compile a <statlist> or a <statlistopt>.
+    fn compile_stat_list(&mut self, node: &Node<u8>) {
+        match *node {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_STATLIST => {
+                // nodes = <stat>
+                if nodes.len() == 1 {
+                    self.compile_stat(get_nodes(&nodes[0], lua5_3_y::R_STAT));
+                } else {
+                    // nodes = [<statlist>, <stat>]
+                    self.compile_stat_list(&nodes[0]);
+                    self.compile_stat(get_nodes(&nodes[1], lua5_3_y::R_STAT));
+                }
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_STATLISTOPT => {
+                // nodes = <statlist>
+                if nodes.len() == 1 {
+                    self.compile_stat_list(&nodes[0]);
+                }
+            }
+            _ => panic!(
+                "Expected a <statlist> or <statlistopt>, but got {:#?}",
+                node
+            ),
         }
     }
 
@@ -84,7 +95,7 @@ impl<'a> LuaToIR<'a> {
     fn compile_stat(&mut self, stat_nodes: &Vec<Node<u8>>) {
         debug_assert!(stat_nodes.len() == 3);
         // look for stat_nodes = [<local>, <namelist>, <eqexplistopt>]
-        if LuaToIR::is_local(&stat_nodes[0]) {
+        if is_term(&stat_nodes[0], lua5_3_l::T_LOCAL) {
             match stat_nodes[2] {
                 // nodes = [<eq>, <explist>]
                 Nonterm {
@@ -176,7 +187,7 @@ impl<'a> LuaToIR<'a> {
 
     /// Jumps to the first child of <node> which denotes a variable name.
     fn compile_variable(&self, node: &Node<u8>) -> &'a str {
-        let name = LuaToIR::find_term(node, lua5_3_l::T_NAME);
+        let name = find_term(node, lua5_3_l::T_NAME);
         match name {
             Some(Term { lexeme }) => self
                 .pt
@@ -281,27 +292,6 @@ impl<'a> LuaToIR<'a> {
         } else {
             panic!("Expected a Node::Term!");
         }
-    }
-
-    /// Find the first Node::Term with the given id.
-    fn find_term(start: &Node<u8>, id: u8) -> Option<&Node<u8>> {
-        let mut pt_nodes: Vec<&Node<u8>> = vec![start];
-        while !pt_nodes.is_empty() {
-            let node = pt_nodes.pop().unwrap(); // always checked if it is empty
-            match node {
-                Nonterm { ridx: _, ref nodes } => {
-                    for ref node in nodes {
-                        pt_nodes.push(node);
-                    }
-                }
-                Term { lexeme } => {
-                    if lexeme.tok_id() == id {
-                        return Some(node);
-                    }
-                }
-            }
-        }
-        None
     }
 }
 
