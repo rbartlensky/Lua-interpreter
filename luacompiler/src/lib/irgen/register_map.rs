@@ -130,12 +130,10 @@ impl<'a> RegisterMap<'a> {
     }
 
     pub fn is_local(&self, name: &str) -> bool {
-        for map in self.reg_maps.iter().rev() {
-            if map.contains_key(name) {
-                return true;
-            }
-        }
-        false
+        self.reg_maps
+            .iter()
+            .find(|x| x.contains_key(name))
+            .is_some()
     }
 
     pub fn lifetimes(&self) -> &Vec<Lifetime> {
