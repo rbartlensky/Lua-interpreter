@@ -51,7 +51,7 @@ impl<'a> LuaToIR<'a> {
     }
 
     /// Compile a <block> without recursively compiling its <retstatopt> child.
-    fn compile_block(&mut self, node: &Node<u8>) {
+    fn compile_block(&mut self, node: &'a Node<u8>) {
         self.curr_reg_map().push_scope();
         self.compile_block_without_scope(node);
         self.curr_reg_map().pop_scope();
@@ -59,14 +59,14 @@ impl<'a> LuaToIR<'a> {
 
     /// Compiles a block in the current scope. This means that the user must
     /// manully push/pop a new scope, if necessary.
-    fn compile_block_without_scope(&mut self, node: &Node<u8>) {
+    fn compile_block_without_scope(&mut self, node: &'a Node<u8>) {
         // nodes = [<statlistopt>, <retstatopt>]
         let nodes = get_nodes(node, lua5_3_y::R_BLOCK);
         self.compile_stat_list(&nodes[0]);
     }
 
     /// Compile a <statlist> or a <statlistopt>.
-    fn compile_stat_list(&mut self, node: &Node<u8>) {
+    fn compile_stat_list(&mut self, node: &'a Node<u8>) {
         match *node {
             Nonterm {
                 ridx: RIdx(ridx),
@@ -99,7 +99,7 @@ impl<'a> LuaToIR<'a> {
 
     /// Compile the children of a <stat> node.
     /// The method can only compile variable assignments.
-    fn compile_stat(&mut self, stat_nodes: &Vec<Node<u8>>) {
+    fn compile_stat(&mut self, stat_nodes: &'a Vec<Node<u8>>) {
         let len = stat_nodes.len();
         if len == 3 {
             // look for stat_nodes = [<local>, <namelist>, <eqexplistopt>]
@@ -110,8 +110,9 @@ impl<'a> LuaToIR<'a> {
                         ridx: RIdx(ridx),
                         ref nodes,
                     } if ridx == lua5_3_y::R_EQEXPLISTOPT => {
-                        // left hand-side = <namelist> and right hand-side = <explist>
-                        self.compile_assignment(&stat_nodes[1], &nodes[1], true);
+                        let names = self.compile_names(&stat_nodes[1]);
+                        let exprs = self.get_underlying_exprs(&nodes[1]);
+                        self.compile_local_assignments(names, exprs);
                     }
                     _ => {}
                 }
@@ -119,11 +120,15 @@ impl<'a> LuaToIR<'a> {
                 match (&stat_nodes[0], &stat_nodes[1]) {
                     // stat_nodes = [<function>, <funcname>, <funcbody>]
                     (Term { lexeme }, _) if lexeme.tok_id() == lua5_3_l::T_FUNCTION => {
-                        self.compile_assignment(&stat_nodes[1], &stat_nodes[2], false);
+                        let name = self.compile_variable(&stat_nodes[1]);
+                        self.compile_assignment(name, &stat_nodes[2], false);
                     }
                     // stat_nodes = [<varlist>, <eq>, <explist>]
                     (_, Term { lexeme }) if lexeme.tok_id() == lua5_3_l::T_EQ => {
-                        self.compile_assignment(&stat_nodes[0], &stat_nodes[2], false);
+                        // x, y, z = 1, 2
+                        let names = self.compile_names(&stat_nodes[0]);
+                        let exprs = self.get_underlying_exprs(&stat_nodes[2]);
+                        self.compile_assignments(names, exprs);
                     }
                     _ => {}
                 }
@@ -140,14 +145,68 @@ impl<'a> LuaToIR<'a> {
         }
     }
 
+    /// Compiles a local multi-assignemnt.
+    /// * `names` - the variable names
+    /// * `exprs` - the expressions that are assigned
+    fn compile_local_assignments(&mut self, names: Vec<&'a str>, exprs: Vec<&'a Node<u8>>) {
+        // example: local a, b, c, d = 1, 2
+        // compile local a = 1, local b = 2
+        for i in 0..exprs.len() {
+            // left hand-side = <namelist> and right hand-side = <explist>
+            self.compile_assignment(names[i], exprs[i], true);
+        }
+        // for all the remaining names (c, d), create a new empty register, because the
+        // user might access the variable later
+        if names.len() > exprs.len() {
+            let reg_map = self.curr_reg_map();
+            for i in exprs.len()..names.len() {
+                reg_map.create_reg(names[i]);
+            }
+        } else if names.len() < exprs.len() {
+            // make sure we also compile every expression on the right side
+            // local a = 1, 2, f(); we have to also compile 2, and f()
+            for i in names.len()..exprs.len() {
+                self.compile_expr(exprs[i]);
+            }
+        }
+    }
+
+    /// Compiles a multi-assignemnt (a combination of local and global assignments).
+    /// * `names` - the variable names
+    /// * `exprs` - the expressions that are assigned
+    fn compile_assignments(&mut self, names: Vec<&'a str>, exprs: Vec<&'a Node<u8>>) {
+        // example: x, y, z, w = 1, 2
+        // compile x = 1, y = 2
+        for (name, expr) in names.iter().zip(exprs.iter()) {
+            self.compile_assignment(name, expr, false);
+        }
+        // for all the remaining names (z, w), create a new empty register, and update
+        // _ENV if the variable has not been declared as local in some outer scope
+        if names.len() > exprs.len() {
+            for i in exprs.len()..names.len() {
+                let reg = self.curr_reg_map().get_new_reg();
+                if !self.curr_reg_map().is_local(names[i]) {
+                    self.add_to_env(names[i], reg);
+                } else {
+                    self.curr_reg_map().set_reg(names[i], reg);
+                }
+            }
+        } else if names.len() < exprs.len() {
+            // make sure we also compile every expression on the right side
+            // a = 1, 2, f(); we have to also compile 2, and f()
+            for i in names.len()..exprs.len() {
+                self.compile_expr(exprs[i]);
+            }
+        }
+    }
+
     /// Compile an assignment by compiling <right> and then storing the result in <left>.
-    /// * `left` - The variable in which the result is stored
+    /// * `left` - The name of the variable in which the result is stored
     /// * `right` - The expression that is evaluated
     /// * `is_local_decl` - Whether the assignment is local or not.
-    fn compile_assignment(&mut self, left: &Node<u8>, right: &Node<u8>, is_local_decl: bool) {
+    fn compile_assignment(&mut self, name: &'a str, right: &'a Node<u8>, is_local_decl: bool) {
         let old_len = self.functions[self.curr_function].instrs().len();
         let mut value = self.compile_expr(right);
-        let name = self.compile_variable(left);
         // the register map only keeps track of local variables
         // if we are compiling: `x = 3`, then we also have to check if x is in `reg_map`
         // if it is, then it is a local assignment (because `reg_map` only stores
@@ -172,19 +231,26 @@ impl<'a> LuaToIR<'a> {
             // that the map knows the new register which holds the new value
             self.curr_reg_map().set_reg(name, value);
         } else {
-            // we would like to generate code for the following statement: _ENV[name] = value
-            // load a reference to _ENV
-            let env_reg = self.curr_reg_map().get_reg("_ENV").unwrap();
-            // prepare the attribute for _ENV which is the name of the variable
-            let name_index = self.const_map.get_str(name.to_string());
-            let attr_reg = self.get_const_str_reg(name_index);
-            self.functions[self.curr_function].push_instr(HLInstr(
-                Opcode::SetAttr,
-                env_reg,
-                attr_reg,
-                value,
-            ));
+            self.add_to_env(name, value);
         }
+    }
+
+    /// Push the necessary instructions in order to store <value> in _ENV[<name>]
+    /// * `name` - the attribute name
+    /// * `value` - the registers which has the value of <name>
+    fn add_to_env(&mut self, name: &'a str, value: usize) {
+        // we would like to generate code for the following statement: _ENV[name] = value
+        // load a reference to _ENV
+        let env_reg = self.curr_reg_map().get_reg("_ENV").unwrap();
+        // prepare the attribute for _ENV which is the name of the variable
+        let name_index = self.const_map.get_str(name.to_string());
+        let attr_reg = self.get_const_str_reg(name_index);
+        self.functions[self.curr_function].push_instr(HLInstr(
+            Opcode::SetAttr,
+            env_reg,
+            attr_reg,
+            value,
+        ));
     }
 
     /// Get the register which contains the constant string <name_index>.
@@ -222,7 +288,7 @@ impl<'a> LuaToIR<'a> {
 
     /// Compile the expression rooted at <node>. Any instructions that are created are
     /// simply added to the bytecode that is being generated.
-    fn compile_expr(&mut self, node: &Node<u8>) -> usize {
+    fn compile_expr(&mut self, node: &'a Node<u8>) -> usize {
         match *node {
             Nonterm {
                 ridx: RIdx(ridx),
@@ -334,7 +400,41 @@ impl<'a> LuaToIR<'a> {
 
     /// Compile an <explist> or <explistopt> and return the registers in which the
     /// result of each expression is stored.
-    fn compile_exprs(&mut self, exprs: &Node<u8>) -> Vec<usize> {
+    fn get_underlying_exprs(&mut self, exprs: &'a Node<u8>) -> Vec<&'a Node<u8>> {
+        match *exprs {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_EXPLIST => {
+                let mut exprs = vec![];
+                // nodes = <exp>
+                if nodes.len() == 1 {
+                    exprs.push(&nodes[0]);
+                } else {
+                    // nodes = [<explist>, <COMMA>,  <exp>]
+                    exprs.extend(self.get_underlying_exprs(&nodes[0]));
+                    exprs.push(&nodes[2]);
+                }
+                exprs
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_EXPLISTOPT => {
+                // nodes = <explist>
+                if nodes.len() > 0 {
+                    self.get_underlying_exprs(&nodes[0])
+                } else {
+                    vec![]
+                }
+            }
+            _ => panic!("Root node was not an <explist> or <explistopt>"),
+        }
+    }
+
+    /// Compile an <explist> or <explistopt> and return the registers in which the
+    /// result of each expression is stored.
+    fn compile_exprs(&mut self, exprs: &'a Node<u8>) -> Vec<usize> {
         match *exprs {
             Nonterm {
                 ridx: RIdx(ridx),
@@ -366,25 +466,25 @@ impl<'a> LuaToIR<'a> {
         }
     }
 
-    /// Compile a <namelist> into a vector of names.
-    fn compile_namelist(&mut self, names: &Node<u8>) -> Vec<&'a str> {
+    /// Compile a <namelist> or a <varlist> into a vector of names.
+    fn compile_names(&mut self, names: &Node<u8>) -> Vec<&'a str> {
         match *names {
             Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
-            } if ridx == lua5_3_y::R_NAMELIST => {
+            } if ridx == lua5_3_y::R_NAMELIST || ridx == lua5_3_y::R_VARLIST => {
                 let mut names = vec![];
                 // nodes = <NAME>
                 if nodes.len() == 1 {
                     names.push(self.compile_variable(&nodes[0]));
                 } else {
-                    // nodes = [<namelist>, <COMMA>, <NAME>]
-                    names.extend(self.compile_namelist(&nodes[0]));
+                    // nodes = [<name/varlist>, <COMMA>, <NAME>]
+                    names.extend(self.compile_names(&nodes[0]));
                     names.push(self.compile_variable(&nodes[2]));
                 }
                 names
             }
-            _ => panic!("Root node is not a <namelist>"),
+            _ => panic!("Root node is not a <namelist> or a <varlist>"),
         }
     }
 
@@ -405,12 +505,12 @@ impl<'a> LuaToIR<'a> {
                 let mut names = vec![];
                 // nodes = [<parlist>, <COMMA>, <...>]
                 if len == 3 {
-                    names.extend(self.compile_namelist(&nodes[0]));
+                    names.extend(self.compile_names(&nodes[0]));
                 } else {
                     // either nodes = <...> or <parlist>
                     match nodes[0] {
                         Term { lexeme: _ } => {}
-                        _ => names.extend(self.compile_namelist(&nodes[0])),
+                        _ => names.extend(self.compile_names(&nodes[0])),
                     }
                 }
                 self.functions[self.curr_function].set_param_count(names.len());
@@ -424,7 +524,7 @@ impl<'a> LuaToIR<'a> {
     }
 
     /// Compile a <functioncall>.
-    fn compile_call(&mut self, func: &Node<u8>, params: &Node<u8>) {
+    fn compile_call(&mut self, func: &'a Node<u8>, params: &'a Node<u8>) {
         let func_reg = self.compile_expr(find_term(func, lua5_3_l::T_NAME).unwrap());
         let params = match *params {
             Nonterm {
@@ -444,7 +544,7 @@ impl<'a> LuaToIR<'a> {
     }
 
     /// Get the appropriate instruction for a given Node::Term.
-    fn get_instr(&self, node: &Node<u8>, reg: usize, lreg: usize, rreg: usize) -> HLInstr {
+    fn get_instr(&self, node: &'a Node<u8>, reg: usize, lreg: usize, rreg: usize) -> HLInstr {
         if let Term { lexeme } = node {
             let opcode = match lexeme.tok_id() {
                 lua5_3_l::T_PLUS => Opcode::ADD,
@@ -740,6 +840,34 @@ mod tests {
                 HLInstr(Opcode::SetAttr, 0, 2, 1),
             ],
         ];
+        for i in 0..ir.functions.len() {
+            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+        }
+    }
+
+    #[test]
+    fn generate_multi_assignments() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local x, y, z, z2 = 1, 3
+             x, y, z = 1, 4, 5, 6
+             a, b = 1",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![vec![
+            HLInstr(Opcode::LDI, 1, 0, 0), // x = 1
+            HLInstr(Opcode::LDI, 2, 1, 0), // y = 3
+            // z and z2 are skipped, but a register is allocated for them
+            HLInstr(Opcode::LDI, 5, 0, 0),       // x = 1
+            HLInstr(Opcode::LDI, 6, 2, 0),       // y = 4
+            HLInstr(Opcode::LDI, 7, 3, 0),       // z = 5
+            HLInstr(Opcode::LDI, 8, 4, 0),       // load 6
+            HLInstr(Opcode::LDI, 9, 0, 0),       // a = 1
+            HLInstr(Opcode::LDS, 10, 0, 0),      // load "a"
+            HLInstr(Opcode::SetAttr, 0, 10, 9),  // _ENV["a"] = 1
+            HLInstr(Opcode::LDS, 12, 1, 0),      // load "b"
+            HLInstr(Opcode::SetAttr, 0, 12, 11), // _ENV["b"] = Nil
+        ]];
         for i in 0..ir.functions.len() {
             check_eq(ir.functions[i].instrs(), &expected_instrs[i])
         }
