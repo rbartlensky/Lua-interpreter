@@ -1,3 +1,4 @@
+use super::lua_closure::LuaClosure;
 use super::lua_table::LuaTable;
 use gc::Gc;
 use std::{mem::size_of, ops::BitXor};
@@ -15,6 +16,7 @@ pub enum LuaValKind {
     FLOAT = 2,
     TABLE = 3,
     NIL = 4,
+    CLOSURE = 5,
 }
 
 impl From<usize> for LuaValKind {
@@ -28,6 +30,7 @@ impl From<usize> for LuaValKind {
                 1 => LuaValKind::INT,
                 2 => LuaValKind::FLOAT,
                 3 => LuaValKind::TABLE,
+                5 => LuaValKind::CLOSURE,
                 _ => unreachable!(),
             }
         }
@@ -49,4 +52,9 @@ pub fn to_raw_ptr<T>(val: T) -> usize {
 /// Untags the given pointer, and returns a mutable pointer to Gc<LuaTable>.
 pub fn table_ptr(encoded_ptr: usize) -> *mut Gc<LuaTable> {
     (encoded_ptr ^ LuaValKind::TABLE as usize) as *mut Gc<LuaTable>
+}
+
+/// Untags the given pointer, and returns a mutable pointer to Gc<LuaClosure>.
+pub fn closure_ptr(encoded_ptr: usize) -> *mut Gc<LuaClosure> {
+    (encoded_ptr ^ LuaValKind::CLOSURE as usize) as *mut Gc<LuaClosure>
 }

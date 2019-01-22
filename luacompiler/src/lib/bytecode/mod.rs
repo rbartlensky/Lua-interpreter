@@ -55,11 +55,11 @@ impl Function {
     }
 }
 
-impl From<CompiledFunc> for Function {
+impl<'a> From<CompiledFunc<'a>> for Function {
     fn from(func: CompiledFunc) -> Function {
         let mut new_function = Function {
             index: func.index(),
-            reg_count: func.lifetimes().len(),
+            reg_count: func.reg_map().reg_count(),
             functions: vec![],
             instrs: vec![],
         };

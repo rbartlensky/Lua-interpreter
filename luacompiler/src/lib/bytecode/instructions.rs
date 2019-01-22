@@ -40,6 +40,7 @@ pub fn format_instr(instr: u32) -> String {
         10 => "Exp",
         11 => "GetAttr",
         12 => "SetAttr",
+        13 => "Closure",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(
@@ -85,6 +86,7 @@ pub enum Opcode {
     EXP = 10,     // R(1) = R(2) ^ R(3)
     GetAttr = 11, // R(1) = R(2)[R(3)]
     SetAttr = 12, // R(1)[R(2)] = R(3)
+    CLOSURE = 13, // R(1) = Closure(R(2))
 }
 
 #[cfg(test)]

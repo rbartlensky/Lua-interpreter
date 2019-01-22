@@ -45,8 +45,8 @@ impl<'a> RegisterMap<'a> {
     pub fn new() -> RegisterMap<'a> {
         RegisterMap {
             lifetimes: vec![Lifetime::new(0)], // env's lifetime will be [0, 1)
-            reg_maps: vec![HashMap::new()],
-            str_maps: vec![HashMap::new()],
+            reg_maps: vec![],
+            str_maps: vec![],
         }
     }
 
@@ -107,12 +107,8 @@ impl<'a> RegisterMap<'a> {
     }
 
     /// Get the total number of registers that were needed.
-    pub fn reg_count(self) -> usize {
+    pub fn reg_count(&self) -> usize {
         self.lifetimes.len()
-    }
-
-    pub(crate) fn get_lifetimes(self) -> Vec<Lifetime> {
-        self.lifetimes
     }
 
     /// Set the register of the string at index <index> to <reg>.
@@ -132,6 +128,10 @@ impl<'a> RegisterMap<'a> {
         }
         None
     }
+
+    pub fn lifetimes(&self) -> &Vec<Lifetime> {
+        &self.lifetimes
+    }
 }
 
 #[cfg(test)]
@@ -141,6 +141,7 @@ mod tests {
     #[test]
     fn new_reg_correctly_increments_counter() {
         let mut rm = RegisterMap::new();
+        rm.push_scope();
         for i in 0..10 {
             assert_eq!(rm.get_new_reg(), i + 1);
         }
@@ -150,6 +151,7 @@ mod tests {
     #[test]
     fn correctly_maps_strings_to_registers() {
         let mut rm = RegisterMap::new();
+        rm.push_scope();
         // create a new register
         assert_eq!(rm.get_new_reg(), 1);
         assert!(rm.get_str_reg(0).is_none());
@@ -163,6 +165,7 @@ mod tests {
     #[test]
     fn correctly_maps_const_strs_to_registers() {
         let mut rm = RegisterMap::new();
+        rm.push_scope();
         // create a new register
         assert_eq!(rm.get_new_reg(), 1);
         // create a mapping
@@ -193,6 +196,7 @@ mod tests {
     #[test]
     fn lifetimes_are_correcly_updated() {
         let mut rm = RegisterMap::new();
+        rm.push_scope();
         let reg1 = rm.get_new_reg();
         assert_eq!(rm.lifetimes[reg1].0, 1);
         assert_eq!(rm.lifetimes[reg1].1, 2);
@@ -213,6 +217,7 @@ mod tests {
     #[test]
     fn registers_are_retrieved_in_the_correct_order() {
         let mut rm = RegisterMap::new();
+        rm.push_scope();
         for _ in 0..3 {
             rm.push_scope();
             rm.create_reg("foo");
