@@ -10,4 +10,6 @@ pub enum LuaError {
     FloatConversionErr,
     /// Raised when a conversion to string fails.
     StringConversionErr,
+    /// Raised when the called register is not a closure.
+    NotAClosure,
 }

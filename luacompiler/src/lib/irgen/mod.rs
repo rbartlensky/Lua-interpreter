@@ -94,30 +94,41 @@ impl<'a> LuaToIR<'a> {
     /// Compile the children of a <stat> node.
     /// The method can only compile variable assignments.
     fn compile_stat(&mut self, stat_nodes: &Vec<Node<u8>>) {
-        debug_assert!(stat_nodes.len() == 3);
-        // look for stat_nodes = [<local>, <namelist>, <eqexplistopt>]
-        if is_term(&stat_nodes[0], lua5_3_l::T_LOCAL) {
-            match stat_nodes[2] {
-                // nodes = [<eq>, <explist>]
+        let len = stat_nodes.len();
+        if len == 3 {
+            // look for stat_nodes = [<local>, <namelist>, <eqexplistopt>]
+            if is_term(&stat_nodes[0], lua5_3_l::T_LOCAL) {
+                match stat_nodes[2] {
+                    // nodes = [<eq>, <explist>]
+                    Nonterm {
+                        ridx: RIdx(ridx),
+                        ref nodes,
+                    } if ridx == lua5_3_y::R_EQEXPLISTOPT => {
+                        // left hand-side = <namelist> and right hand-side = <explist>
+                        self.compile_assignment(&stat_nodes[1], &nodes[1], true);
+                    }
+                    _ => {}
+                }
+            } else {
+                match (&stat_nodes[0], &stat_nodes[1]) {
+                    // stat_nodes = [<function>, <funcname>, <funcbody>]
+                    (Term { lexeme }, _) if lexeme.tok_id() == lua5_3_l::T_FUNCTION => {
+                        self.compile_assignment(&stat_nodes[1], &stat_nodes[2], false);
+                    }
+                    // stat_nodes = [<varlist>, <eq>, <explist>]
+                    (_, Term { lexeme }) if lexeme.tok_id() == lua5_3_l::T_EQ => {
+                        self.compile_assignment(&stat_nodes[0], &stat_nodes[2], false);
+                    }
+                    _ => {}
+                }
+            }
+        } else if len == 1 {
+            // stat_nodes = <functioncall>
+            match stat_nodes[0] {
                 Nonterm {
                     ridx: RIdx(ridx),
                     ref nodes,
-                } if ridx == lua5_3_y::R_EQEXPLISTOPT => {
-                    // left hand-side = <namelist> and right hand-side = <explist>
-                    self.compile_assignment(&stat_nodes[1], &nodes[1], true);
-                }
-                _ => {}
-            }
-        } else {
-            match (&stat_nodes[0], &stat_nodes[1]) {
-                // stat_nodes = [<function>, <funcname>, <funcbody>]
-                (Term { lexeme }, _) if lexeme.tok_id() == lua5_3_l::T_FUNCTION => {
-                    self.compile_assignment(&stat_nodes[1], &stat_nodes[2], false);
-                }
-                // stat_nodes = [<varlist>, <eq>, <explist>]
-                (_, Term { lexeme }) if lexeme.tok_id() == lua5_3_l::T_EQ => {
-                    self.compile_assignment(&stat_nodes[0], &stat_nodes[2], false);
-                }
+                } if ridx == lua5_3_y::R_FUNCTIONCALL => self.compile_call(&nodes[0], &nodes[1]),
                 _ => {}
             }
         }
@@ -311,6 +322,11 @@ impl<'a> LuaToIR<'a> {
         }
     }
 
+    fn compile_call(&mut self, func: &Node<u8>, _params: &Node<u8>) {
+        let func_reg = self.compile_expr(find_term(func, lua5_3_l::T_NAME).unwrap());
+        self.functions[self.curr_function].push_instr(HLInstr(Opcode::CALL, func_reg, 0, 0));
+    }
+
     /// Get the appropriate instruction for a given Node::Term.
     fn get_instr(&self, node: &Node<u8>, reg: usize, lreg: usize, rreg: usize) -> HLInstr {
         if let Term { lexeme } = node {
@@ -413,7 +429,11 @@ mod tests {
 
     #[test]
     fn correctness_of_ssa_ir2() {
-        let pt = &LuaParseTree::from_str(String::from("x = 1\ny = x")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "x = 1
+             y = x",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDI, 1, 0, 0),     // R(1) = INT(0) == 1
@@ -471,7 +491,11 @@ mod tests {
 
     #[test]
     fn locals_and_globals() {
-        let pt = &LuaParseTree::from_str(String::from("local x = 2\ny = x")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "local x = 2
+             y = x",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDI, 1, 0, 0),
@@ -484,12 +508,20 @@ mod tests {
 
     #[test]
     fn load_string_multiple_times() {
-        let pt = &LuaParseTree::from_str(String::from("local x = \"1\"\nlocal y = \"1\"")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "local x = \"1\"
+             local y = \"1\"",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![HLInstr(Opcode::LDS, 1, 0, 0), HLInstr(Opcode::MOV, 2, 1, 0)];
         let function = &ir.functions[ir.main_func];
         check_eq(function.instrs(), &expected_instrs);
-        let pt = &LuaParseTree::from_str(String::from("x = \"1\"\ny = \"x\"")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "x = \"1\"
+             y = \"x\"",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDS, 1, 0, 0),     // R(1) = "1"
@@ -505,13 +537,50 @@ mod tests {
 
     #[test]
     fn generate_closure() {
-        let pt = &LuaParseTree::from_str(String::from("function f()\n\tx = 3\nend")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "function f()
+                 x = 3
+             end",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
                 HLInstr(Opcode::CLOSURE, 1, 0, 0),
                 HLInstr(Opcode::LDS, 2, 1, 0),
                 HLInstr(Opcode::SetAttr, 0, 2, 1),
+            ],
+            vec![
+                HLInstr(Opcode::LDI, 1, 0, 0),
+                HLInstr(Opcode::LDS, 2, 0, 0),
+                HLInstr(Opcode::SetAttr, 0, 2, 1),
+            ],
+        ];
+        for i in 0..ir.functions.len() {
+            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+        }
+    }
+
+    #[test]
+    fn generate_call() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "function f()
+                 x = 3
+             end
+             f()
+             f()",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                HLInstr(Opcode::CLOSURE, 1, 0, 0),
+                HLInstr(Opcode::LDS, 2, 1, 0),
+                HLInstr(Opcode::SetAttr, 0, 2, 1),
+                HLInstr(Opcode::GetAttr, 3, 0, 2),
+                HLInstr(Opcode::CALL, 3, 0, 0),
+                HLInstr(Opcode::GetAttr, 4, 0, 2),
+                HLInstr(Opcode::CALL, 4, 0, 0),
             ],
             vec![
                 HLInstr(Opcode::LDI, 1, 0, 0),
