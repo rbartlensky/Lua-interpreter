@@ -84,7 +84,11 @@ mod tests {
 
     #[test]
     fn env_set_and_get() {
-        let mut vm = get_vm_for("x = 3\ny = x + 1".to_string());
+        let mut vm = get_vm_for(
+            "x = 3
+             y = x + 1"
+                .to_string(),
+        );
         vm.eval();
         let index_of_x = 0;
         // vm.registers[0] has a reference to the _ENV variable

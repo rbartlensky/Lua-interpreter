@@ -429,7 +429,11 @@ mod tests {
 
     #[test]
     fn correctness_of_ssa_ir2() {
-        let pt = &LuaParseTree::from_str(String::from("x = 1\ny = x")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "x = 1
+             y = x",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDI, 1, 0, 0),     // R(1) = INT(0) == 1
@@ -487,7 +491,11 @@ mod tests {
 
     #[test]
     fn locals_and_globals() {
-        let pt = &LuaParseTree::from_str(String::from("local x = 2\ny = x")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "local x = 2
+             y = x",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDI, 1, 0, 0),
@@ -500,12 +508,20 @@ mod tests {
 
     #[test]
     fn load_string_multiple_times() {
-        let pt = &LuaParseTree::from_str(String::from("local x = \"1\"\nlocal y = \"1\"")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "local x = \"1\"
+             local y = \"1\"",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![HLInstr(Opcode::LDS, 1, 0, 0), HLInstr(Opcode::MOV, 2, 1, 0)];
         let function = &ir.functions[ir.main_func];
         check_eq(function.instrs(), &expected_instrs);
-        let pt = &LuaParseTree::from_str(String::from("x = \"1\"\ny = \"x\"")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "x = \"1\"
+             y = \"x\"",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             HLInstr(Opcode::LDS, 1, 0, 0),     // R(1) = "1"
@@ -521,7 +537,12 @@ mod tests {
 
     #[test]
     fn generate_closure() {
-        let pt = &LuaParseTree::from_str(String::from("function f()\n\tx = 3\nend")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "function f()
+                 x = 3
+             end",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
@@ -542,8 +563,14 @@ mod tests {
 
     #[test]
     fn generate_call() {
-        let pt =
-            &LuaParseTree::from_str(String::from("function f()\n\tx = 3\nend\nf()\nf()")).unwrap();
+        let pt = &LuaParseTree::from_str(String::from(
+            "function f()
+                 x = 3
+             end
+             f()
+             f()",
+        ))
+        .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
