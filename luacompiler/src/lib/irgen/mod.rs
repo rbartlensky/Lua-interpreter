@@ -869,15 +869,15 @@ mod tests {
             HLInstr(Opcode::LDI, 1, 0, 0), // x = 1
             HLInstr(Opcode::LDI, 2, 1, 0), // y = 3
             // z and z2 are skipped, but a register is allocated for them
-            HLInstr(Opcode::LDI, 5, 0, 0),       // x = 1
-            HLInstr(Opcode::LDI, 6, 2, 0),       // y = 4
-            HLInstr(Opcode::LDI, 7, 3, 0),       // z = 5
-            HLInstr(Opcode::LDI, 8, 4, 0),       // load 6
-            HLInstr(Opcode::LDI, 9, 0, 0),       // a = 1
+            HLInstr(Opcode::LDI, 5, 0, 0), // x = 1
+            HLInstr(Opcode::LDI, 6, 2, 0), // y = 4
+            HLInstr(Opcode::LDI, 7, 3, 0), // z = 5
+            HLInstr(Opcode::LDI, 8, 4, 0), // load 6
+            HLInstr(Opcode::LDI, 9, 0, 0), // a = 1
             // we generate a register for b as well, but because it isn't a local decl
             // it is simply ignored
-            HLInstr(Opcode::LDS, 11, 0, 0),      // load "a"
-            HLInstr(Opcode::SetAttr, 0, 11, 9),  // _ENV["a"] = 1
+            HLInstr(Opcode::LDS, 11, 0, 0),     // load "a"
+            HLInstr(Opcode::SetAttr, 0, 11, 9), // _ENV["a"] = 1
         ]];
         for i in 0..ir.functions.len() {
             check_eq(ir.functions[i].instrs(), &expected_instrs[i])
@@ -953,12 +953,12 @@ mod tests {
                 HLInstr(Opcode::CALL, 3, 4, 0), // call f with 4 arguments
             ],
             vec![
-                HLInstr(Opcode::VarArg, 3, 2, 0),  // copy 2 args from vararg into reg 4,5
-                HLInstr(Opcode::LDS, 5, 0, 0),     // load "x"
+                HLInstr(Opcode::VarArg, 3, 2, 0), // copy 2 args from vararg into reg 4,5
+                HLInstr(Opcode::LDS, 5, 0, 0),    // load "x"
                 HLInstr(Opcode::SetAttr, 0, 5, 1), // _ENV["x"] = a
-                HLInstr(Opcode::LDS, 6, 1, 0),     // load "y"
+                HLInstr(Opcode::LDS, 6, 1, 0),    // load "y"
                 HLInstr(Opcode::SetAttr, 0, 6, 3), // _ENV["y"] = nil
-                HLInstr(Opcode::LDS, 7, 2, 0),     // load "z"
+                HLInstr(Opcode::LDS, 7, 2, 0),    // load "z"
                 HLInstr(Opcode::SetAttr, 0, 7, 4), // _ENV["z"] = nil
             ],
         ];
