@@ -15,6 +15,7 @@ use std::{
 pub struct Function {
     index: usize,
     reg_count: usize,
+    param_count: usize,
     // Indecies of all the functions that are the children of this function.
     functions: Vec<usize>,
     instrs: Vec<u32>,
@@ -27,6 +28,7 @@ impl Function {
             index: 0,
             functions: vec![],
             reg_count: 0,
+            param_count: 0,
             instrs,
         }
     }
@@ -53,6 +55,10 @@ impl Function {
     pub fn reg_count(&self) -> usize {
         self.reg_count
     }
+
+    pub fn param_count(&self) -> usize {
+        self.param_count
+    }
 }
 
 impl<'a> From<CompiledFunc<'a>> for Function {
@@ -60,6 +66,7 @@ impl<'a> From<CompiledFunc<'a>> for Function {
         let mut new_function = Function {
             index: func.index(),
             reg_count: func.reg_map().reg_count(),
+            param_count: func.param_count(),
             functions: vec![],
             instrs: vec![],
         };

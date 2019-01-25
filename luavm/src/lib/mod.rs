@@ -23,6 +23,7 @@ const REG_NUM: usize = 256;
 /// The instruction handler for each opcode.
 const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
     mov, ldi, ldf, lds, add, sub, mul, div, modulus, fdiv, exp, get_attr, set_attr, closure, call,
+    push,
 ];
 
 /// Represents a `LuaBytecode` interpreter.
@@ -114,11 +115,6 @@ mod tests {
 
     #[test]
     fn function_call() {
-        // function f()
-        //     x = 3
-        //     local x = 4
-        // end
-        // f()
         let mut vm = get_vm_for(
             "function f()
                  x = 3
@@ -131,5 +127,53 @@ mod tests {
         let index_of_x = 0;
         // env is correctly updated
         assert_eq!(vm.env_attrs[index_of_x], LuaVal::from(3));
+    }
+
+    #[test]
+    fn function_call_with_args() {
+        let mut vm = get_vm_for(
+            "function f(a)
+                 x = a
+                 local x = 4
+             end
+             f(3)"
+                .to_string(),
+        );
+        vm.eval();
+        let index_of_x = 0;
+        // env is correctly updated
+        assert_eq!(vm.env_attrs[index_of_x], LuaVal::from(3));
+    }
+
+    #[test]
+    fn function_call_with_extra_args() {
+        let mut vm = get_vm_for(
+            "function f(a)
+                 x = a
+                 local x = 4
+             end
+             f(3, 4, 5)"
+                .to_string(),
+        );
+        vm.eval();
+        let index_of_x = 0;
+        // env is correctly updated
+        assert_eq!(vm.env_attrs[index_of_x], LuaVal::from(3));
+    }
+
+    #[test]
+    fn function_call_with_no_args() {
+        let mut vm = get_vm_for(
+            "function f(a)
+                 x = a
+                 local x = 4
+             end
+             f()"
+            .to_string(),
+        );
+        vm.eval();
+        let index_of_x = 0;
+        // env is correctly updated
+        assert_eq!(vm.env_attrs[index_of_x], LuaVal::new());
     }
 }
