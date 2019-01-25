@@ -15,15 +15,30 @@ pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
 }
 
 pub fn push(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
-    vm.stack
-        .push(vm.registers[first_arg(instr) as usize].clone());
+    // push all the variable arguments of the current function to the stack
+    if second_arg(instr) == 1 {
+        let param_count = vm.bytecode.get_function(vm.curr_func).param_count();
+        let args_count = vm.closure.closure_args_count()?;
+        let args_start = vm.closure.closure_args_start()?;
+        // make sure to skip the arguments which are the actual parameters
+        for i in (args_start + param_count)..(args_start + args_count) {
+            let val = vm.stack[i].clone();
+            vm.stack.push(val);
+        }
+    } else {
+        vm.stack
+            .push(vm.registers[first_arg(instr) as usize].clone());
+    }
     Ok(())
 }
 
 pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
+    let first_arg = first_arg(instr) as usize;
+    let old_closure = vm.closure.clone();
+    vm.closure = vm.registers[first_arg].clone();
     // The closure_index method gives us an index of the bytecode.functions vector
     // where we have to "jump" in order to find the instructions of the callee.
-    let index = vm.registers[first_arg(instr) as usize].closure_index()?;
+    let index = vm.closure.closure_index()?;
     let old_func = vm.curr_func;
     vm.curr_func = index;
     // push the first `reg_num` registers to the stack, as the function will modify these
@@ -37,6 +52,8 @@ pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     // its parameters to be located at
     let num_of_args = second_arg(instr) as usize;
     let mut index_of_arg = vm.stack.len() - (reg_num - 1) - num_of_args;
+    vm.closure.closure_set_args_count(num_of_args)?;
+    vm.closure.closure_set_args_start(index_of_arg)?;
     let num_of_params = vm.bytecode.get_function(vm.curr_func).param_count();
     // copy arguments into registers [R(1)..R(num_of_params)]
     for i in 0..num_of_params {
@@ -58,6 +75,28 @@ pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     for _ in 0..num_of_args {
         vm.stack.pop();
     }
+    vm.closure = old_closure;
     vm.curr_func = old_func;
+    Ok(())
+}
+
+pub fn vararg(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
+    let param_count = vm.bytecode.get_function(vm.curr_func).param_count();
+    // where they start on the stack
+    let args_start = vm.closure.closure_args_start()?;
+    let mut var_args_start = args_start + param_count;
+    let var_args_end = args_start + vm.closure.closure_args_count()?;
+    // The first register which receives a cloned value from varargs
+    let start_reg = first_arg(instr) as usize;
+    // second operand tells us how many registers we have to assign
+    for r in start_reg..(start_reg + second_arg(instr) as usize) {
+        // in the case where we don't have enough arguments to unpack generate Nils
+        vm.registers[r] = if var_args_start < var_args_end {
+            vm.stack[var_args_start].clone()
+        } else {
+            LuaVal::new()
+        };
+        var_args_start += 1;
+    }
     Ok(())
 }
