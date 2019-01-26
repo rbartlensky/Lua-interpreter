@@ -1,4 +1,4 @@
-use bytecode::instructions::HLInstr;
+use bytecode::instructions::{HLInstr, Opcode};
 use irgen::register_map::{Lifetime, RegisterMap};
 
 /// Represents a compiled function in Lua.
@@ -8,17 +8,19 @@ pub struct CompiledFunc<'a> {
     instrs: Vec<HLInstr>,
     reg_map: RegisterMap<'a>,
     param_count: usize,
+    is_vararg: bool,
 }
 
 impl<'a> CompiledFunc<'a> {
     /// Create a new empty function with the given index.
-    pub fn new(index: usize) -> CompiledFunc<'a> {
+    pub fn new(index: usize, is_vararg: bool) -> CompiledFunc<'a> {
         CompiledFunc {
             index,
             functions: vec![],
             instrs: vec![],
             reg_map: RegisterMap::new(),
             param_count: 0,
+            is_vararg,
         }
     }
 
@@ -40,6 +42,21 @@ impl<'a> CompiledFunc<'a> {
         self.instrs.push(instr);
     }
 
+    pub fn get_mut_instr(&mut self, i: usize) -> &mut HLInstr {
+        &mut self.instrs[i]
+    }
+
+    pub fn get_instr_with_opcode(&mut self, op: Opcode) -> &mut HLInstr {
+        let mut index = 0;
+        for i in (0..self.instrs.len()).rev() {
+            if self.instrs[i].0 == op {
+                index = i;
+                break;
+            }
+        }
+        &mut self.instrs[index]
+    }
+
     /// Get a reference to all the instructions of this function.
     pub fn instrs(&self) -> &Vec<HLInstr> {
         &self.instrs
@@ -55,6 +72,10 @@ impl<'a> CompiledFunc<'a> {
 
     pub fn lifetimes(&self) -> &Vec<Lifetime> {
         self.reg_map.lifetimes()
+    }
+
+    pub fn is_vararg(&self) -> bool {
+        self.is_vararg
     }
 
     pub(crate) fn extract_functions(self) -> Vec<usize> {

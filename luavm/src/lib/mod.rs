@@ -23,7 +23,7 @@ const REG_NUM: usize = 256;
 /// The instruction handler for each opcode.
 const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
     mov, ldi, ldf, lds, add, sub, mul, div, modulus, fdiv, exp, get_attr, set_attr, closure, call,
-    push,
+    push, vararg,
 ];
 
 /// Represents a `LuaBytecode` interpreter.
@@ -38,6 +38,7 @@ pub struct Vm {
     /// "x" was not in the constant table, then the lookup of the attribute would be
     /// done via the `get_attr` method of the `LuaTable` struct.
     pub env_attrs: Vec<LuaVal>,
+    pub closure: LuaVal,
 }
 
 impl Vm {
@@ -57,6 +58,7 @@ impl Vm {
             registers,
             stack: vec![],
             env_attrs,
+            closure: LuaVal::new(),
         }
     }
 
@@ -175,5 +177,27 @@ mod tests {
         let index_of_x = 0;
         // env is correctly updated
         assert_eq!(vm.env_attrs[index_of_x], LuaVal::new());
+    }
+
+    #[test]
+    fn function_call_with_varargs() {
+        let mut vm = get_vm_for(
+            "function f(a, ...)
+                 x = a
+                 y, z, w = ...
+             end
+             f(1, 2, 3)"
+                .to_string(),
+        );
+        vm.eval();
+        let index_of_x = 0;
+        let index_of_y = 1;
+        let index_of_z = 2;
+        let index_of_w = 3;
+        // env is correctly updated
+        assert_eq!(vm.env_attrs[index_of_x], LuaVal::from(1));
+        assert_eq!(vm.env_attrs[index_of_y], LuaVal::from(2));
+        assert_eq!(vm.env_attrs[index_of_z], LuaVal::from(3));
+        assert_eq!(vm.env_attrs[index_of_w], LuaVal::new());
     }
 }

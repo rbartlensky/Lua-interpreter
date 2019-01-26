@@ -202,6 +202,34 @@ impl LuaVal {
         }
         Err(LuaError::NotAClosure)
     }
+
+    pub fn closure_args_count(&self) -> Result<usize, LuaError> {
+        if let LuaValKind::CLOSURE = self.kind() {
+            return Ok(unsafe { (*closure_ptr(self.val)).args_count() });
+        }
+        Err(LuaError::NotAClosure)
+    }
+
+    pub fn closure_set_args_count(&self, count: usize) -> Result<(), LuaError> {
+        if let LuaValKind::CLOSURE = self.kind() {
+            return Ok(unsafe { (*closure_ptr(self.val)).set_args_count(count) });
+        }
+        Err(LuaError::NotAClosure)
+    }
+
+    pub fn closure_args_start(&self) -> Result<usize, LuaError> {
+        if let LuaValKind::CLOSURE = self.kind() {
+            return Ok(unsafe { (*closure_ptr(self.val)).args_start() });
+        }
+        Err(LuaError::NotAClosure)
+    }
+
+    pub fn closure_set_args_start(&self, count: usize) -> Result<(), LuaError> {
+        if let LuaValKind::CLOSURE = self.kind() {
+            return Ok(unsafe { (*closure_ptr(self.val)).set_args_start(count) });
+        }
+        Err(LuaError::NotAClosure)
+    }
 }
 
 impl PartialEq for LuaVal {
