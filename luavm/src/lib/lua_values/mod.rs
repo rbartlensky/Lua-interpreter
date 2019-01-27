@@ -3,10 +3,14 @@ mod lua_obj;
 pub mod lua_table;
 mod tagging;
 
-use self::{lua_closure::LuaClosure, lua_obj::*, lua_table::LuaTable, tagging::*};
+use self::{lua_closure::*, lua_obj::*, lua_table::LuaTable, tagging::*};
+use crate::stdlib::StdFunction;
 use errors::LuaError;
 use gc::{Finalize, Gc, Trace};
+use luacompiler::bytecode::Function;
 use std::{
+    fmt,
+    fmt::{Display, Formatter},
     hash::{Hash, Hasher},
     mem::transmute,
 };
@@ -196,37 +200,9 @@ impl LuaVal {
         Ok(LuaVal::from(self.to_float()?.powf(other.to_float()?)))
     }
 
-    pub fn closure_index(&self) -> Result<usize, LuaError> {
+    pub fn get_closure(&self) -> Result<Gc<Box<LuaClosure>>, LuaError> {
         if let LuaValKind::CLOSURE = self.kind() {
-            return Ok(unsafe { (*closure_ptr(self.val)).index() });
-        }
-        Err(LuaError::NotAClosure)
-    }
-
-    pub fn closure_args_count(&self) -> Result<usize, LuaError> {
-        if let LuaValKind::CLOSURE = self.kind() {
-            return Ok(unsafe { (*closure_ptr(self.val)).args_count() });
-        }
-        Err(LuaError::NotAClosure)
-    }
-
-    pub fn closure_set_args_count(&self, count: usize) -> Result<(), LuaError> {
-        if let LuaValKind::CLOSURE = self.kind() {
-            return Ok(unsafe { (*closure_ptr(self.val)).set_args_count(count) });
-        }
-        Err(LuaError::NotAClosure)
-    }
-
-    pub fn closure_args_start(&self) -> Result<usize, LuaError> {
-        if let LuaValKind::CLOSURE = self.kind() {
-            return Ok(unsafe { (*closure_ptr(self.val)).args_start() });
-        }
-        Err(LuaError::NotAClosure)
-    }
-
-    pub fn closure_set_args_start(&self, count: usize) -> Result<(), LuaError> {
-        if let LuaValKind::CLOSURE = self.kind() {
-            return Ok(unsafe { (*closure_ptr(self.val)).set_args_start(count) });
+            return Ok(unsafe { (*closure_ptr(self.val)).clone() });
         }
         Err(LuaError::NotAClosure)
     }
@@ -341,11 +317,29 @@ impl From<LuaTable> for LuaVal {
     }
 }
 
-impl From<LuaClosure> for LuaVal {
+impl From<&StdFunction> for LuaVal {
     /// Create a closure LuaVal
-    fn from(closure: LuaClosure) -> Self {
+    fn from(func: &StdFunction) -> Self {
         LuaVal {
-            val: LuaValKind::CLOSURE ^ to_raw_ptr(Gc::new(closure)),
+            val: LuaValKind::CLOSURE ^ to_raw_ptr(from_stdfunction(func)),
+        }
+    }
+}
+
+impl From<&Function> for LuaVal {
+    /// Create a closure LuaVal
+    fn from(func: &Function) -> Self {
+        LuaVal {
+            val: LuaValKind::CLOSURE ^ to_raw_ptr(from_function(func)),
+        }
+    }
+}
+
+impl From<UserFunction> for LuaVal {
+    /// Create a closure LuaVal
+    fn from(func: UserFunction) -> Self {
+        LuaVal {
+            val: LuaValKind::CLOSURE ^ to_raw_ptr(Gc::new(Box::new(func))),
         }
     }
 }
@@ -384,6 +378,23 @@ impl Clone for LuaVal {
             },
         };
         LuaVal { val }
+    }
+}
+
+impl Display for LuaVal {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self.kind() {
+            LuaValKind::INT | LuaValKind::FLOAT | LuaValKind::BOXED => {
+                write!(f, "{}", self.to_string().unwrap())
+            }
+            LuaValKind::NIL => write!(f, "nil"),
+            LuaValKind::TABLE => write!(f, "lua_table at {:x}", unsafe {
+                (*table_ptr(self.val)).addr()
+            }),
+            LuaValKind::CLOSURE => write!(f, "lua_closure at {:x}", unsafe {
+                (*closure_ptr(self.val)).addr()
+            }),
+        }
     }
 }
 
@@ -515,7 +526,7 @@ mod tests {
 
     #[test]
     fn closure_type() {
-        let mut main = LuaVal::from(LuaClosure::new(0));
+        let mut main = LuaVal::from(UserFunction::new(0, 0, 0));
         assert_eq!(main.kind(), LuaValKind::CLOSURE);
         assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
@@ -533,7 +544,7 @@ mod tests {
             LuaVal::from(3.0),
             LuaVal::from(LuaTable::new(HashMap::new())),
             LuaVal::from(String::from("3.0")),
-            LuaVal::from(LuaClosure::new(0)),
+            LuaVal::from(UserFunction::new(0, 0, 0)),
         ]
     }
 
@@ -923,7 +934,7 @@ mod tests {
             LuaVal::from(1.0),
             LuaVal::from(String::from("1.0")),
             LuaVal::from(LuaTable::new(HashMap::new())),
-            LuaVal::from(LuaClosure::new(0)),
+            LuaVal::from(UserFunction::new(0, 0, 0)),
         ]
     }
 

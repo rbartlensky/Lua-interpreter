@@ -55,6 +55,6 @@ pub fn table_ptr(encoded_ptr: usize) -> *mut Gc<LuaTable> {
 }
 
 /// Untags the given pointer, and returns a mutable pointer to Gc<LuaClosure>.
-pub fn closure_ptr(encoded_ptr: usize) -> *mut Gc<LuaClosure> {
-    (encoded_ptr ^ LuaValKind::CLOSURE as usize) as *mut Gc<LuaClosure>
+pub fn closure_ptr(encoded_ptr: usize) -> *mut Gc<Box<LuaClosure>> {
+    (encoded_ptr ^ LuaValKind::CLOSURE as usize) as *mut Gc<Box<LuaClosure>>
 }

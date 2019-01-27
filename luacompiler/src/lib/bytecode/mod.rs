@@ -135,6 +135,10 @@ impl LuaBytecode {
         &self.strings[i as usize]
     }
 
+    pub fn strings(&self) -> &Vec<String> {
+        &self.strings
+    }
+
     /// Gets the size of the string constant table.
     pub fn get_strings_len(&self) -> usize {
         self.strings.len()

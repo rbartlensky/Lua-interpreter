@@ -10,12 +10,15 @@ extern crate assert_float_eq;
 mod errors;
 mod instructions;
 mod lua_values;
+mod stdlib;
 
 use errors::LuaError;
+use gc::Gc;
 use instructions::{arithmetic_operators::*, functions::*, loads::*, tables::*};
-use lua_values::{lua_table::LuaTable, LuaVal};
+use lua_values::{lua_closure::LuaClosure, lua_table::LuaTable, LuaVal};
 use luacompiler::bytecode::{instructions::opcode, LuaBytecode};
 use std::collections::HashMap;
+use stdlib::STDLIB_FUNCS;
 
 /// The maximum number of registers of the VM.
 const REG_NUM: usize = 256;
@@ -29,7 +32,6 @@ const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
 /// Represents a `LuaBytecode` interpreter.
 pub struct Vm {
     pub bytecode: LuaBytecode,
-    pub curr_func: usize,
     pub registers: Vec<LuaVal>,
     pub stack: Vec<LuaVal>,
     /// All attributes of _ENV that are also part of the string constant table are stored
@@ -38,7 +40,7 @@ pub struct Vm {
     /// "x" was not in the constant table, then the lookup of the attribute would be
     /// done via the `get_attr` method of the `LuaTable` struct.
     pub env_attrs: Vec<LuaVal>,
-    pub closure: LuaVal,
+    pub closure: Gc<Box<LuaClosure>>,
 }
 
 impl Vm {
@@ -51,23 +53,41 @@ impl Vm {
         }
         let mut env_attrs = Vec::new();
         env_attrs.resize(bytecode.get_strings_len(), LuaVal::new());
-        let curr_func = bytecode.get_main_function();
+        Vm::init_stdlib(&bytecode, &mut registers[0], &mut env_attrs);
+        let closure = LuaVal::from(bytecode.get_function(bytecode.get_main_function()));
         Vm {
             bytecode,
-            curr_func,
             registers,
             stack: vec![],
             env_attrs,
-            closure: LuaVal::new(),
+            closure: closure.get_closure().unwrap(),
+        }
+    }
+
+    fn init_stdlib(bc: &LuaBytecode, env: &mut LuaVal, env_attrs: &mut Vec<LuaVal>) {
+        let mut strings = bc.strings().iter().enumerate();
+        for func in STDLIB_FUNCS {
+            if let Some(res) = strings.find(|s| s.1 == func.name()) {
+                env_attrs[res.0] = LuaVal::from(func);
+            } else {
+                env.set_attr(LuaVal::from(func.name().to_string()), LuaVal::from(func))
+                    .unwrap();
+            }
         }
     }
 
     /// Evaluate the program.
     pub fn eval(&mut self) {
         let mut pc = 0;
-        let len = self.bytecode.get_function(self.curr_func).instrs_len();
+        let len = self
+            .bytecode
+            .get_function(self.closure.index())
+            .instrs_len();
         while pc < len {
-            let instr = self.bytecode.get_function(self.curr_func).get_instr(pc);
+            let instr = self
+                .bytecode
+                .get_function(self.closure.index())
+                .get_instr(pc);
             (OPCODE_HANDLER[opcode(instr) as usize])(self, instr).unwrap();
             pc += 1;
         }
