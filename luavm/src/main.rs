@@ -12,6 +12,11 @@ fn main() {
         .author("Robert Bartlensky")
         .about("Interpret Lua files")
         .arg(
+            Arg::with_name("bytecode")
+                .long("bytecode")
+                .help("Print the bytecode produced by the compiler."),
+        )
+        .arg(
             Arg::with_name("INPUT")
                 .help("File to interpret")
                 .required(true)
@@ -24,6 +29,9 @@ fn main() {
     match parse_tree {
         Ok(pt) => {
             let bc = compile_to_bytecode(compile_to_ir(&pt));
+            if matches.is_present("bytecode") {
+                println!("{}", &bc);
+            }
             let mut vm = Vm::new(bc);
             vm.eval();
         }
