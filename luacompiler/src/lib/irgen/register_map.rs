@@ -136,6 +136,10 @@ impl<'a> RegisterMap<'a> {
             .is_some()
     }
 
+    pub fn pop_last_reg(&mut self) {
+        self.lifetimes.pop();
+    }
+
     pub fn lifetimes(&self) -> &Vec<Lifetime> {
         &self.lifetimes
     }

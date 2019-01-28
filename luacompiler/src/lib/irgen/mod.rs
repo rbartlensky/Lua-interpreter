@@ -78,6 +78,63 @@ impl<'a> LuaToIR<'a> {
         // nodes = [<statlistopt>, <retstatopt>]
         let nodes = get_nodes(node, lua5_3_y::R_BLOCK);
         self.compile_stat_list(&nodes[0]);
+        self.compile_retstat(&nodes[1]);
+    }
+
+    /// Compile <retstatopt>
+    fn compile_retstat(&mut self, node: &'a Node<u8>) {
+        match *node {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_RETSTATOPT => {
+                if nodes.len() > 0 {
+                    let exprs = self.get_underlying_exprs(&nodes[1]);
+                    // push the first n-1 return values to the stack
+                    for i in 0..(exprs.len() - 1) {
+                        let reg = self.compile_expr(exprs[i]);
+                        self.functions[self.curr_function].push_instr(HLInstr(
+                            Opcode::PUSH,
+                            reg,
+                            0,
+                            // the vm should add 1 to the number of return values
+                            1,
+                        ));
+                    }
+                    self.unpack_to_stack(&exprs.last().unwrap(), true);
+                    self.functions[self.curr_function].push_instr(HLInstr(Opcode::RET, 0, 0, 0));
+                }
+            }
+            _ => panic!("Expected a <retstatopt>, but got {:#?}", node),
+        }
+    }
+
+    fn unpack_to_stack(&mut self, last_expr: &'a Node<u8>, increment_ret_vals: bool) {
+        let reg = self.compile_expr(last_expr);
+        if self.is_unpackable(last_expr) {
+            {
+                let len = self.functions[self.curr_function].instrs().len();
+                // this is either a VarArg instr, or a MOVR
+                let last_instr = self.functions[self.curr_function].get_mut_instr(len - 1);
+                debug_assert!(last_instr.0 == Opcode::MOVR || last_instr.0 == Opcode::VarArg);
+                // check bytecode/instructions.rs for more info on why we set the third
+                // argument to 1 or 2
+                last_instr.1 = 0;
+                last_instr.2 = 0;
+                last_instr.3 = 1 + increment_ret_vals as usize;
+            }
+            // compile_expr will generate (VarArg/MOVR <new_reg> <op2> <op3>)
+            // but because we are modifying the last instruction, there is
+            // no need to keep the previously allocated register
+            self.curr_reg_map().pop_last_reg();
+        } else {
+            self.functions[self.curr_function].push_instr(HLInstr(
+                Opcode::PUSH,
+                reg,
+                0,
+                increment_ret_vals as usize,
+            ));
+        }
     }
 
     /// Compile a <statlist> or a <statlistopt>.
@@ -173,15 +230,17 @@ impl<'a> LuaToIR<'a> {
         // for all the remaining names (c, d), create a new empty register, because the
         // user might access the variable later
         if names.len() > exprs.len() {
+            let mut regs = vec![];
             for i in exprs.len()..names.len() {
                 self.curr_reg_map().create_reg(names[i]);
+                regs.push(self.curr_reg_map().reg_count() - 1);
             }
             // check if the last expression is a vararg, so that we can emit the correct
             // instruction
-            if exprs.len() > 0 && self.is_vararg(exprs.last().unwrap()) {
-                let instr =
-                    self.functions[self.curr_function].get_instr_with_opcode(Opcode::VarArg);
-                instr.2 += names.len() - exprs.len();
+            if let Some(expr) = exprs.last() {
+                if self.is_unpackable(expr) {
+                    self.unpack(&names[exprs.len()..names.len()], regs, expr);
+                }
             }
         } else if names.len() < exprs.len() {
             // make sure we also compile every expression on the right side
@@ -216,6 +275,7 @@ impl<'a> LuaToIR<'a> {
         // names.len() == exprs.len() is intentionally left out because that case is
         // handled by the loop above
         if names.len() > exprs.len() {
+            let mut regs = vec![];
             for i in exprs.len()..names.len() {
                 let reg = self.curr_reg_map().get_new_reg();
                 if !self.curr_reg_map().is_local(names[i]) {
@@ -223,10 +283,11 @@ impl<'a> LuaToIR<'a> {
                 } else {
                     self.curr_reg_map().set_reg(names[i], reg);
                 }
-                if exprs.len() > 0 && self.is_vararg(exprs.last().unwrap()) {
-                    let instr =
-                        self.functions[self.curr_function].get_instr_with_opcode(Opcode::VarArg);
-                    instr.2 += names.len() - exprs.len();
+                regs.push(reg);
+            }
+            if let Some(expr) = exprs.last() {
+                if self.is_unpackable(expr) {
+                    self.unpack(&names[exprs.len()..names.len()], regs, expr);
                 }
             }
         } else if names.len() < exprs.len() {
@@ -239,6 +300,30 @@ impl<'a> LuaToIR<'a> {
         // generate the missing instructions that were postponed
         for (name, reg) in postponed_envs {
             self.add_to_env(name, reg);
+        }
+    }
+
+    fn is_unpackable(&self, expr: &Node<u8>) -> bool {
+        self.is_vararg(expr) || self.is_functioncall(expr)
+    }
+
+    fn unpack(&mut self, names: &[&str], regs: Vec<usize>, expr: &Node<u8>) {
+        if self.is_vararg(expr) {
+            let instr = self.functions[self.curr_function].get_instr_with_opcode(Opcode::VarArg);
+            instr.2 += names.len();
+        } else {
+            // local a, b, c = f(2)
+            // we are unpacking f(2) into a, b, and c, but we have already pushed a
+            // MOVR in compile_assignemnts, thus we have to unpack the rest of the
+            // values into b, and c
+            for (i, reg) in regs.iter().enumerate() {
+                self.functions[self.curr_function].push_instr(HLInstr(
+                    Opcode::MOVR,
+                    *reg,
+                    i + 1, // + 1 because of the extra MOVR
+                    0,
+                ));
+            }
         }
     }
 
@@ -378,6 +463,15 @@ impl<'a> LuaToIR<'a> {
                     func_num,
                     0,
                 ));
+                reg
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_FUNCTIONCALL => {
+                self.compile_call(&nodes[0], &nodes[1]);
+                let reg = self.curr_reg_map().get_new_reg();
+                self.functions[self.curr_function].push_instr(HLInstr(Opcode::MOVR, reg, 0, 0));
                 reg
             }
             Nonterm {
@@ -576,13 +670,7 @@ impl<'a> LuaToIR<'a> {
                 let reg = self.compile_expr(exprs[i]);
                 self.functions[self.curr_function].push_instr(HLInstr(Opcode::PUSH, reg, 0, 0));
             }
-            let instr = if self.is_vararg(exprs.last().unwrap()) {
-                HLInstr(Opcode::PUSH, 0, 1, 0)
-            } else {
-                let reg = self.compile_expr(exprs.last().unwrap());
-                HLInstr(Opcode::PUSH, reg, 0, 0)
-            };
-            self.functions[self.curr_function].push_instr(instr);
+            self.unpack_to_stack(&exprs.last().unwrap(), false);
         }
         // call the function, but also specify how many arguments it should expect
         self.functions[self.curr_function].push_instr(HLInstr(
@@ -599,6 +687,21 @@ impl<'a> LuaToIR<'a> {
             Nonterm { ridx: _, ref nodes } => nodes.len() == 1 && self.is_vararg(&nodes[0]),
             Term { lexeme } => lexeme.tok_id() == lua5_3_l::T_DOTDOTDOT,
         }
+    }
+
+    fn is_functioncall(&self, expr: &Node<u8>) -> bool {
+        if let Nonterm {
+            ridx: RIdx(ridx),
+            ref nodes,
+        } = expr
+        {
+            if *ridx == lua5_3_y::R_FUNCTIONCALL {
+                return true;
+            } else {
+                return nodes.len() == 1 && self.is_functioncall(&nodes[0]);
+            }
+        }
+        false
     }
 
     /// Get the appropriate instruction for a given Node::Term.
@@ -965,7 +1068,7 @@ mod tests {
                 // next register is 6, as VarArg will assign to 4 and 5
                 HLInstr(Opcode::LDS, 6, 0, 0),     // "f"
                 HLInstr(Opcode::GetAttr, 7, 0, 6), // load reference to f
-                HLInstr(Opcode::PUSH, 0, 1, 0),    // push all varargs
+                HLInstr(Opcode::VarArg, 0, 0, 1),  // push all varargs
                 HLInstr(Opcode::CALL, 7, 1, 0),    // f(...)
             ],
         ];
