@@ -22,11 +22,11 @@ pub fn push(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
         // make sure to skip the arguments which are the actual parameters
         for i in (args_start + vm.closure.param_count())..(args_start + args_count) {
             let val = vm.stack[i].clone();
-            vm.stack.push(val);
+            vm.push(val);
         }
     } else {
-        vm.stack
-            .push(vm.registers[first_arg(instr) as usize].clone());
+        let val = vm.registers[first_arg(instr) as usize].clone();
+        vm.push(val);
     }
     Ok(())
 }
@@ -37,7 +37,8 @@ pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     // push the first `reg_count` registers to the stack, as the function will modify these
     let reg_count = vm.closure.reg_count();
     for i in 1..reg_count {
-        vm.stack.push(vm.registers[i].clone());
+        let reg = vm.registers[i].clone();
+        vm.push(reg);
     }
     // the compiler might have pushed some arguments, but the exact number is encoded
     // in the second operand of the call instruction
@@ -60,14 +61,11 @@ pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
         index_of_arg += 1;
     }
     vm.closure.clone().call(vm);
-    // restore the state of the caller
-    for i in (1..reg_count).rev() {
-        vm.registers[i] = vm.stack.pop().unwrap();
+    // restore the registers
+    for (reg, i) in ((vm.top - (reg_count - 1))..(vm.top)).enumerate() {
+        std::mem::swap(&mut vm.registers[reg + 1], &mut vm.stack[i]);
     }
-    // pop the arguments
-    for _ in 0..args_count {
-        vm.stack.pop();
-    }
+    vm.top -= args_count + (reg_count - 1);
     vm.closure = old_closure;
     Ok(())
 }

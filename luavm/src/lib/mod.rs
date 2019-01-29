@@ -36,6 +36,7 @@ pub struct Vm {
     pub bytecode: LuaBytecode,
     pub registers: Vec<LuaVal>,
     pub stack: Vec<LuaVal>,
+    pub top: usize,
     /// All attributes of _ENV that are also part of the string constant table are stored
     /// in a vector. Let's consider an example: "x" is mapped to index 2 in the constant
     /// table. This means that _ENV["x"] = <val> will modify env_attrs[2]. If however
@@ -61,6 +62,7 @@ impl Vm {
             bytecode,
             registers,
             stack: vec![],
+            top: 0,
             env_attrs,
             closure: closure.get_closure().unwrap(),
         }
@@ -93,6 +95,15 @@ impl Vm {
             (OPCODE_HANDLER[opcode(instr) as usize])(self, instr).unwrap();
             pc += 1;
         }
+    }
+
+    pub fn push(&mut self, val: LuaVal) {
+        if self.top < self.stack.len() {
+            self.stack[self.top] = val;
+        } else {
+            self.stack.push(val);
+        }
+        self.top += 1;
     }
 }
 
