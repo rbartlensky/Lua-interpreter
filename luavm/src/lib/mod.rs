@@ -14,7 +14,9 @@ mod stdlib;
 
 use errors::LuaError;
 use gc::Gc;
-use instructions::{arithmetic_operators::*, functions::*, loads::*, tables::*};
+use instructions::{
+    arithmetic_operators::*, functions::*, loads::*, relational_operators::*, tables::*,
+};
 use lua_values::{lua_closure::LuaClosure, lua_table::LuaTable, LuaVal};
 use luacompiler::bytecode::{instructions::opcode, LuaBytecode};
 use std::collections::HashMap;
@@ -26,7 +28,7 @@ const REG_NUM: usize = 256;
 /// The instruction handler for each opcode.
 const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
     mov, ldi, ldf, lds, add, sub, mul, div, modulus, fdiv, exp, get_attr, set_attr, closure, call,
-    push, vararg,
+    push, vararg, eq,
 ];
 
 /// Represents a `LuaBytecode` interpreter.

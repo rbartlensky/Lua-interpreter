@@ -17,6 +17,7 @@ pub enum LuaValKind {
     TABLE = 3,
     NIL = 4,
     CLOSURE = 5,
+    BOOL = 6,
 }
 
 impl From<usize> for LuaValKind {
@@ -31,6 +32,7 @@ impl From<usize> for LuaValKind {
                 2 => LuaValKind::FLOAT,
                 3 => LuaValKind::TABLE,
                 5 => LuaValKind::CLOSURE,
+                6 => LuaValKind::BOOL,
                 _ => unreachable!(),
             }
         }
