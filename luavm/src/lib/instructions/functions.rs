@@ -34,25 +34,25 @@ pub fn push(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
 pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     let old_closure = vm.closure.clone();
     vm.closure = vm.registers[first_arg(instr) as usize].get_closure()?;
-    // push the first `reg_num` registers to the stack, as the function will modify these
-    let reg_num = vm.closure.reg_count();
-    for i in 1..reg_num {
+    // push the first `reg_count` registers to the stack, as the function will modify these
+    let reg_count = vm.closure.reg_count();
+    for i in 1..reg_count {
         vm.stack.push(vm.registers[i].clone());
     }
     // the compiler might have pushed some arguments, but the exact number is encoded
     // in the second operand of the call instruction
     // we have to make sure that those arguments are copied where the function expects
     // its parameters to be located at
-    let num_of_args = second_arg(instr) as usize;
-    let mut index_of_arg = vm.stack.len() - (reg_num - 1) - num_of_args;
-    vm.closure.set_args_count(num_of_args);
+    let args_count = second_arg(instr) as usize;
+    let mut index_of_arg = vm.stack.len() - (reg_count - 1) - args_count;
+    vm.closure.set_args_count(args_count);
     vm.closure.set_args_start(index_of_arg);
-    let num_of_params = vm.closure.param_count();
-    // copy arguments into registers [R(1)..R(num_of_params)]
-    for i in 0..num_of_params {
+    let param_count = vm.closure.param_count();
+    // copy arguments into registers [R(1)..R(param_count)]
+    for i in 0..param_count {
         // if the caller didn't push enough arguments, we have to set the remaining
         // parameter registers to nil, so that we don't use some value from the old frame
-        vm.registers[i + 1] = if i < num_of_args {
+        vm.registers[i + 1] = if i < args_count {
             vm.stack[index_of_arg].clone()
         } else {
             LuaVal::new()
@@ -61,11 +61,11 @@ pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     }
     vm.closure.clone().call(vm);
     // restore the state of the caller
-    for i in (1..reg_num).rev() {
+    for i in (1..reg_count).rev() {
         vm.registers[i] = vm.stack.pop().unwrap();
     }
     // pop the arguments
-    for _ in 0..num_of_args {
+    for _ in 0..args_count {
         vm.stack.pop();
     }
     vm.closure = old_closure;
