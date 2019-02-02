@@ -1,4 +1,4 @@
-use crate::{stdlib::StdFunction, Vm};
+use crate::{errors::LuaError, stdlib::StdFunction, Vm};
 use gc::{Finalize, Gc, GcCell, Trace};
 use luacompiler::bytecode::Function;
 
@@ -76,8 +76,7 @@ impl LuaClosure for UserFunction {
 #[derive(Trace, Finalize)]
 pub struct BuiltinFunction {
     #[unsafe_ignore_trace]
-    handler: fn(&mut Vm),
-    param_count: usize,
+    handler: fn(&mut Vm) -> Result<(), LuaError>,
     args_count: GcCell<usize>,
     args_start: GcCell<usize>,
     ret_vals: GcCell<usize>,
@@ -111,7 +110,7 @@ impl LuaClosure for BuiltinFunction {
     }
 
     fn param_count(&self) -> usize {
-        self.param_count
+        0
     }
 
     fn call(&self, vm: &mut Vm) {
@@ -130,7 +129,6 @@ impl LuaClosure for BuiltinFunction {
 pub fn from_stdfunction(func: &StdFunction) -> Gc<Box<LuaClosure>> {
     Gc::new(Box::new(BuiltinFunction {
         handler: func.handler(),
-        param_count: func.param_count(),
         args_count: GcCell::new(0),
         args_start: GcCell::new(0),
         ret_vals: GcCell::new(0),

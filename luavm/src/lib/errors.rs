@@ -12,4 +12,6 @@ pub enum LuaError {
     StringConversionErr,
     /// Raised when the called register is not a closure.
     NotAClosure,
+    /// A generic error.
+    Error(String),
 }
