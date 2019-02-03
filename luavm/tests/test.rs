@@ -14,7 +14,7 @@ fn compile_and_run(file: &str) {
     let bc = compile_to_bytecode(compile_to_ir(&pt));
     println!("Interpreting {}", file);
     let mut vm = Vm::new(bc);
-    vm.eval();
+    vm.eval().unwrap();
 }
 
 #[test]
