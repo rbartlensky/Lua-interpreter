@@ -716,8 +716,8 @@ impl<'a> LuaToIR<'a> {
                 lua5_3_l::T_MOD => Opcode::MOD,
                 lua5_3_l::T_FSFS => Opcode::FDIV,
                 lua5_3_l::T_CARET => Opcode::EXP,
-                lua5_3_l::T_EQ => Opcode::EQ,
-                _ => unimplemented!("Instruction {}", lexeme.tok_id()),
+                lua5_3_l::T_EQEQ => Opcode::EQ,
+                _ => unimplemented!("Instruction {:#?}", node),
             };
             HLInstr(opcode, reg, lreg, rreg)
         } else {
