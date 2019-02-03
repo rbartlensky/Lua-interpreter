@@ -33,7 +33,7 @@ fn main() {
                 println!("{}", &bc);
             }
             let mut vm = Vm::new(bc);
-            vm.eval();
+            vm.eval().unwrap();
         }
         Err(err) => println!("{:#?}", err),
     }

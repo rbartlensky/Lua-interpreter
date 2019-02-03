@@ -60,8 +60,8 @@ impl LuaClosure for UserFunction {
         self.param_count
     }
 
-    fn call(&self, vm: &mut Vm) {
-        vm.eval();
+    fn call(&self, vm: &mut Vm) -> Result<(), LuaError> {
+        vm.eval()
     }
 
     fn ret_vals(&self) -> usize {
@@ -114,8 +114,8 @@ impl LuaClosure for BuiltinFunction {
         self.param_count
     }
 
-    fn call(&self, vm: &mut Vm) {
-        (self.handler)(vm);
+    fn call(&self, vm: &mut Vm) -> Result<(), LuaError> {
+        (self.handler)(vm)
     }
 
     fn ret_vals(&self) -> usize {
@@ -156,7 +156,7 @@ pub trait LuaClosure: Trace + Finalize {
     fn set_args_start(&self, count: usize);
     fn reg_count(&self) -> usize;
     fn param_count(&self) -> usize;
-    fn call(&self, vm: &mut Vm);
+    fn call(&self, vm: &mut Vm) -> Result<(), LuaError>;
     fn ret_vals(&self) -> usize;
     fn set_ret_vals(&self, vals: usize);
 }
