@@ -45,6 +45,8 @@ pub fn format_instr(instr: u32) -> String {
         15 => "Push",
         16 => "VarArg",
         17 => "Eq",
+        18 => "MovR",
+        19 => "Ret",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(
@@ -75,6 +77,7 @@ impl HLInstr {
 /// Each operation can have at most 3 arguments.
 /// There are 256 available registers, and load operations (LDI, LDF, LDS) can only
 /// refer to at most 256 constants.
+/// Arg(i) represents the i-th argument; Reg(i) == The Arg(i)-th register
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Opcode {
     MOV = 0,      // R(1) = R(2)
@@ -91,10 +94,19 @@ pub enum Opcode {
     GetAttr = 11, // R(1) = R(2)[R(3)]
     SetAttr = 12, // R(1)[R(2)] = R(3)
     CLOSURE = 13, // R(1) = Closure(R(2))
-    CALL = 14,    // call R(1) with R(2) arguments
-    PUSH = 15,    // Push R(1) to the stack
-    VarArg = 16,  // Copy Arg(2) varargs into registers starting from R(1)
-    EQ = 17,      // R(1) == R(2)
+    CALL = 14,    // call R(1) with Arg(2) arguments
+    // Push R(1) to the stack; If Arg(3) is set to some value, then it is added
+    // to the number of return values of a function
+    PUSH = 15,
+    // Copy Arg(2) varargs into registers starting from R(1);
+    // If Arg(3) is set to 1, then all varargs are pushed to the stack
+    // If Arg(3) is set to 2, then the vm will do the same thing as before,
+    // but also increase the count of the return values of a function
+    VarArg = 16,
+    EQ = 17, // R(1) == R(2)
+    // Copy return value RV(2) into R(1); Arg(3) = 1 or 2 => same reasoning as above
+    MOVR = 18,
+    RET = 19, // return to the parent frame
 }
 
 #[cfg(test)]
