@@ -60,7 +60,7 @@ pub fn format_instr(instr: u32) -> String {
 }
 
 /// Represents a high level instruction whose operands have a size of usize.
-/// This is used by the frontend to create an SSA IR, which later gets translated
+/// This is used by the frontend to create a high-level IR, which later gets translated
 /// into smaller instructions that fit in 32 bits.
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub struct HLInstr(pub Opcode, pub usize, pub usize, pub usize);

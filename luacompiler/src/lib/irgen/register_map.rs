@@ -33,10 +33,16 @@ impl Lifetime {
     }
 }
 
+#[derive(PartialEq, Eq, Debug)]
+pub struct Reg {
+    pub lifetime: Lifetime,
+    pub is_decl: bool,
+}
+
 /// Represents a structure that is used to map Lua variables to registers, and to keep
 /// track of their lifetimes. Each Lua module has its own register map.
 pub struct RegisterMap<'a> {
-    lifetimes: Vec<Lifetime>,
+    regs: Vec<Reg>,
     reg_maps: Vec<HashMap<&'a str, usize>>,
     str_maps: Vec<HashMap<usize, usize>>,
 }
@@ -44,7 +50,10 @@ pub struct RegisterMap<'a> {
 impl<'a> RegisterMap<'a> {
     pub fn new() -> RegisterMap<'a> {
         RegisterMap {
-            lifetimes: vec![Lifetime::new(0)], // env's lifetime will be [0, 1)
+            regs: vec![Reg {
+                lifetime: Lifetime::new(0), // env's lifetime will be [0, 1)
+                is_decl: true,
+            }],
             reg_maps: vec![],
             str_maps: vec![],
         }
@@ -65,9 +74,12 @@ impl<'a> RegisterMap<'a> {
 
     /// Creates and returns a new register.
     pub fn get_new_reg(&mut self) -> usize {
-        let lifetime = Lifetime::new(self.lifetimes.len());
-        self.lifetimes.push(lifetime);
-        self.lifetimes.len() - 1
+        let lifetime = Lifetime::new(self.regs.len());
+        self.regs.push(Reg {
+            lifetime,
+            is_decl: false,
+        });
+        self.regs.len() - 1
     }
 
     /// Creates a mapping between <name> and a newly created register.
@@ -79,11 +91,11 @@ impl<'a> RegisterMap<'a> {
 
     /// Get the register of <name>.
     pub fn get_reg(&mut self, name: &'a str) -> Option<usize> {
-        let lifetimes = &mut self.lifetimes;
+        let regs = &mut self.regs;
         for map in self.reg_maps.iter().rev() {
             if let Some(&reg) = map.get(name) {
-                let len = lifetimes.len();
-                lifetimes[reg].set_end_point(len + 1);
+                let len = regs.len();
+                regs[reg].lifetime.set_end_point(len + 1);
                 return Some(reg);
             }
         }
@@ -93,8 +105,8 @@ impl<'a> RegisterMap<'a> {
         // Users can also reference _ENV, in which case we want to update _ENVs lifetime
         // and return the register of _ENV (which is always 0)
         if name == "_ENV" {
-            let len = lifetimes.len();
-            lifetimes[ENV_REG].set_end_point(len + 1);
+            let len = regs.len();
+            regs[ENV_REG].lifetime.set_end_point(len + 1);
             Some(ENV_REG)
         } else {
             None
@@ -108,7 +120,7 @@ impl<'a> RegisterMap<'a> {
 
     /// Get the total number of registers that were needed.
     pub fn reg_count(&self) -> usize {
-        self.lifetimes.len()
+        self.regs.len()
     }
 
     /// Set the register of the string at index <index> to <reg>.
@@ -118,11 +130,11 @@ impl<'a> RegisterMap<'a> {
 
     /// Get the register in which the constant string <index> is loaded.
     pub fn get_str_reg(&mut self, index: usize) -> Option<usize> {
-        let lifetimes = &mut self.lifetimes;
+        let regs = &mut self.regs;
         for map in self.str_maps.iter().rev() {
             if let Some(&reg) = map.get(&index) {
-                let len = lifetimes.len();
-                lifetimes[reg].set_end_point(len + 1);
+                let len = regs.len();
+                regs[reg].lifetime.set_end_point(len + 1);
                 return Some(reg);
             }
         }
@@ -137,11 +149,30 @@ impl<'a> RegisterMap<'a> {
     }
 
     pub fn pop_last_reg(&mut self) {
-        self.lifetimes.pop();
+        self.regs.pop();
     }
 
-    pub fn lifetimes(&self) -> &Vec<Lifetime> {
-        &self.lifetimes
+    pub fn set_local_decl(&mut self, reg: usize) {
+        self.regs[reg].is_decl = true;
+    }
+
+    pub fn regs(&self) -> &Vec<Reg> {
+        &self.regs
+    }
+
+    /// Get the register of <name>.
+    pub fn get_outer_local_decl(&mut self, name: &'a str) -> Option<usize> {
+        let regs = &mut self.regs;
+        for map in self.reg_maps[0..(self.reg_maps.len() - 1)].iter().rev() {
+            if let Some(&reg) = map.get(name) {
+                if regs[reg].is_decl {
+                    let len = regs.len();
+                    regs[reg].lifetime.set_end_point(len + 1);
+                    return Some(reg);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -205,23 +236,23 @@ mod tests {
     }
 
     #[test]
-    fn lifetimes_are_correcly_updated() {
+    fn regs_are_correcly_updated() {
         let mut rm = RegisterMap::new();
         rm.push_scope();
         let reg1 = rm.get_new_reg();
-        assert_eq!(rm.lifetimes[reg1].0, 1);
-        assert_eq!(rm.lifetimes[reg1].1, 2);
+        assert_eq!(rm.regs[reg1].lifetime.0, 1);
+        assert_eq!(rm.regs[reg1].lifetime.1, 2);
         let reg2 = rm.create_reg("reg");
-        assert_eq!(rm.lifetimes[reg2].0, 2);
-        assert_eq!(rm.lifetimes[reg2].1, 3);
+        assert_eq!(rm.regs[reg2].lifetime.0, 2);
+        assert_eq!(rm.regs[reg2].lifetime.1, 3);
         rm.get_reg("reg");
-        assert_eq!(rm.lifetimes[reg2].0, 2);
-        assert_eq!(rm.lifetimes[reg2].1, 4);
+        assert_eq!(rm.regs[reg2].lifetime.0, 2);
+        assert_eq!(rm.regs[reg2].lifetime.1, 4);
         rm.push_scope();
         let reg3 = rm.create_reg("reg3");
         rm.pop_scope();
-        assert_eq!(rm.lifetimes[reg3].0, 3);
-        assert_eq!(rm.lifetimes[reg3].1, 4);
+        assert_eq!(rm.regs[reg3].lifetime.0, 3);
+        assert_eq!(rm.regs[reg3].lifetime.1, 4);
         assert_eq!(rm.reg_count(), 4);
     }
 
@@ -237,5 +268,19 @@ mod tests {
             assert_eq!(rm.get_reg("foo"), Some(3 - i));
             rm.pop_scope();
         }
+    }
+
+    #[test]
+    fn is_decl_and_get_outer() {
+        let mut rm = RegisterMap::new();
+        rm.push_scope();
+        let r = rm.get_new_reg();
+        rm.set_reg("foo", r);
+        rm.set_local_decl(r);
+        assert!(rm.get_outer_local_decl("foo").is_none());
+        rm.push_scope();
+        let r2 = rm.get_new_reg();
+        rm.set_reg("foo", r2);
+        assert_eq!(rm.get_outer_local_decl("foo"), Some(1));
     }
 }

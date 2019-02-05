@@ -1,5 +1,5 @@
 use bytecode::instructions::{HLInstr, Opcode};
-use irgen::register_map::{Lifetime, RegisterMap};
+use irgen::register_map::{Reg, RegisterMap};
 
 /// Represents a compiled function in Lua.
 pub struct CompiledFunc<'a> {
@@ -70,8 +70,8 @@ impl<'a> CompiledFunc<'a> {
         &mut self.reg_map
     }
 
-    pub fn lifetimes(&self) -> &Vec<Lifetime> {
-        self.reg_map.lifetimes()
+    pub fn regs(&self) -> &Vec<Reg> {
+        self.reg_map.regs()
     }
 
     pub fn is_vararg(&self) -> bool {

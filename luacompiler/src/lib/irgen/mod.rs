@@ -16,7 +16,7 @@ use lua5_3_l;
 use lua5_3_y;
 use LuaParseTree;
 
-/// Compile the given parse tree into an SSA IR.
+/// Compile the given parse tree into a high-level IR.
 pub fn compile_to_ir(pt: &LuaParseTree) -> LuaIR {
     LuaToIR::new(pt).to_lua_ir()
 }
@@ -36,7 +36,7 @@ enum VariableType {
     Global(usize),
 }
 
-/// Represents a compiler which translates a given Lua parse tree to an SSA IR.
+/// Represents a compiler which translates a given Lua parse tree to a high-level IR.
 /// The compiler assumes that the `_ENV` variable is always stored in register 0!
 struct LuaToIR<'a> {
     pt: &'a LuaParseTree,
@@ -232,8 +232,10 @@ impl<'a> LuaToIR<'a> {
         if names.len() > exprs.len() {
             let mut regs = vec![];
             for i in exprs.len()..names.len() {
+                let reg = self.curr_reg_map().reg_count();
                 self.curr_reg_map().create_reg(names[i]);
-                regs.push(self.curr_reg_map().reg_count() - 1);
+                self.curr_reg_map().set_local_decl(reg);
+                regs.push(reg);
             }
             // check if the last expression is a vararg, so that we can emit the correct
             // instruction
@@ -282,6 +284,15 @@ impl<'a> LuaToIR<'a> {
                     postponed_envs.push((names[i], reg));
                 } else {
                     self.curr_reg_map().set_reg(names[i], reg);
+                    let outer = self.curr_reg_map().get_outer_local_decl(names[i]);
+                    if let Some(outer) = outer {
+                        self.functions[self.curr_function].push_instr(HLInstr(
+                            Opcode::MOV,
+                            outer,
+                            reg,
+                            0,
+                        ));
+                    }
                 }
                 regs.push(reg);
             }
@@ -363,6 +374,19 @@ impl<'a> LuaToIR<'a> {
             // if a variable is assigned a value multiple times, we have to make sure
             // that the map knows the new register which holds the new value
             self.curr_reg_map().set_reg(name, value);
+            if action == AssignmentType::LocalDecl {
+                self.curr_reg_map().set_local_decl(value);
+            } else {
+                let outer = self.curr_reg_map().get_outer_local_decl(name);
+                if let Some(outer) = outer {
+                    self.functions[self.curr_function].push_instr(HLInstr(
+                        Opcode::MOV,
+                        outer,
+                        value,
+                        0,
+                    ));
+                }
+            }
             VariableType::Local(value)
         } else {
             if action != AssignmentType::Postponed {
@@ -646,7 +670,9 @@ impl<'a> LuaToIR<'a> {
                 self.functions[self.curr_function].set_param_count(names.len());
                 let mut reg_map = self.curr_reg_map();
                 for name in names {
+                    let r = reg_map.reg_count() - 1;
                     reg_map.create_reg(name);
+                    reg_map.set_local_decl(r);
                 }
             }
             _ => panic!("Root node was not a <parlist>"),
@@ -729,7 +755,7 @@ impl<'a> LuaToIR<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use irgen::register_map::Lifetime;
+    use irgen::register_map::{Lifetime, Reg};
     use std::fmt::Debug;
 
     fn check_eq<T: Debug + PartialEq>(output: &Vec<T>, expected: &Vec<T>) {
@@ -740,7 +766,7 @@ mod tests {
     }
 
     #[test]
-    fn correctness_of_ssa_ir() {
+    fn simple_math() {
         let pt = &LuaParseTree::from_str(String::from("x = 1 + 2 * 3 / 2 ^ 2.0 // 1 - 2")).unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
@@ -762,38 +788,70 @@ mod tests {
         ];
         let function = &ir.functions[0];
         check_eq(function.instrs(), &expected_instrs);
-        // check that the IR is in SSA form
-        let mut regs = Vec::with_capacity(function.instrs().len());
-        regs.resize(function.instrs().len(), false);
-        for i in function.instrs() {
-            regs[i.1] = !regs[i.1];
-            // if at any point this assertion fails, it means that a register has been
-            // assigned a value multiple times
-            // SetAttr only updates the state of a register, so it doesn't mess up the
-            // correctness of the SSA
-            if i.0 != Opcode::SetAttr {
-                assert!(regs[i.1]);
-            }
-        }
         // check lifetimes
-        let expected_lifetimes = vec![
-            Lifetime::with_end_point(0, 15),
-            Lifetime::with_end_point(1, 2),
-            Lifetime::with_end_point(2, 3),
-            Lifetime::with_end_point(3, 4),
-            Lifetime::with_end_point(4, 5),
-            Lifetime::with_end_point(5, 6),
-            Lifetime::with_end_point(6, 7),
-            Lifetime::with_end_point(7, 8),
-            Lifetime::with_end_point(8, 9),
-            Lifetime::with_end_point(9, 10),
-            Lifetime::with_end_point(10, 11),
-            Lifetime::with_end_point(11, 12),
-            Lifetime::with_end_point(12, 13),
-            Lifetime::with_end_point(13, 14),
-            Lifetime::with_end_point(14, 15),
+        let expected_regs = vec![
+            Reg {
+                lifetime: Lifetime::with_end_point(0, 15),
+                is_decl: true,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(1, 2),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(2, 3),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(3, 4),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(4, 5),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(5, 6),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(6, 7),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(7, 8),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(8, 9),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(9, 10),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(10, 11),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(11, 12),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(12, 13),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(13, 14),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(14, 15),
+                is_decl: false,
+            },
         ];
-        check_eq(function.lifetimes(), &expected_lifetimes);
+        check_eq(function.regs(), &expected_regs);
         // check constats map
         let expected_ints = vec![1, 2, 3];
         let ints = ir.const_map.get_ints();
@@ -807,7 +865,7 @@ mod tests {
     }
 
     #[test]
-    fn correctness_of_ssa_ir2() {
+    fn simple_assignment() {
         let pt = &LuaParseTree::from_str(String::from(
             "x = 1
              y = x",
@@ -824,26 +882,30 @@ mod tests {
         ];
         let function = &ir.functions[ir.main_func];
         check_eq(function.instrs(), &expected_instrs);
-        // check that the IR is in SSA form
-        let mut regs = Vec::with_capacity(function.instrs().len());
-        regs.resize(function.instrs().len(), false);
-        for i in function.instrs() {
-            regs[i.1] = !regs[i.1];
-            // if at any point this assertion fails, it means that a register has been
-            // assigned a value multiple times
-            if i.0 != Opcode::SetAttr {
-                assert!(regs[i.1]);
-            }
-        }
         // check lifetimes
-        let expected_lifetimes = vec![
-            Lifetime::with_end_point(0, 5),
-            Lifetime::with_end_point(1, 2),
-            Lifetime::with_end_point(2, 4),
-            Lifetime::with_end_point(3, 4),
-            Lifetime::with_end_point(4, 5),
+        let expected_regs = vec![
+            Reg {
+                lifetime: Lifetime::with_end_point(0, 5),
+                is_decl: true,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(1, 2),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(2, 4),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(3, 4),
+                is_decl: false,
+            },
+            Reg {
+                lifetime: Lifetime::with_end_point(4, 5),
+                is_decl: false,
+            },
         ];
-        check_eq(function.lifetimes(), &expected_lifetimes);
+        check_eq(function.regs(), &expected_regs);
         // check constats map
         let expected_ints = vec![1];
         let ints = ir.const_map.get_ints();
