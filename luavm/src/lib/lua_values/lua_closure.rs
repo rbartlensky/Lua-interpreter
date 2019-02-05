@@ -15,6 +15,7 @@ pub struct UserFunction {
     param_count: usize,
     args_count: GcCell<usize>,
     args_start: GcCell<usize>,
+    ret_vals: GcCell<usize>,
 }
 
 impl UserFunction {
@@ -25,6 +26,7 @@ impl UserFunction {
             param_count,
             args_count: GcCell::new(0),
             args_start: GcCell::new(0),
+            ret_vals: GcCell::new(0),
         }
     }
 }
@@ -61,6 +63,14 @@ impl LuaClosure for UserFunction {
     fn call(&self, vm: &mut Vm) {
         vm.eval();
     }
+
+    fn ret_vals(&self) -> usize {
+        self.ret_vals.borrow().clone()
+    }
+
+    fn set_ret_vals(&self, vals: usize) {
+        *self.ret_vals.borrow_mut() = vals;
+    }
 }
 
 #[derive(Trace, Finalize)]
@@ -70,6 +80,7 @@ pub struct BuiltinFunction {
     param_count: usize,
     args_count: GcCell<usize>,
     args_start: GcCell<usize>,
+    ret_vals: GcCell<usize>,
 }
 
 impl LuaClosure for BuiltinFunction {
@@ -106,6 +117,14 @@ impl LuaClosure for BuiltinFunction {
     fn call(&self, vm: &mut Vm) {
         (self.handler)(vm);
     }
+
+    fn ret_vals(&self) -> usize {
+        self.ret_vals.borrow().clone()
+    }
+
+    fn set_ret_vals(&self, vals: usize) {
+        *self.ret_vals.borrow_mut() = vals;
+    }
 }
 
 pub fn from_stdfunction(func: &StdFunction) -> Gc<Box<LuaClosure>> {
@@ -114,6 +133,7 @@ pub fn from_stdfunction(func: &StdFunction) -> Gc<Box<LuaClosure>> {
         param_count: func.param_count(),
         args_count: GcCell::new(0),
         args_start: GcCell::new(0),
+        ret_vals: GcCell::new(0),
     }))
 }
 
@@ -124,6 +144,7 @@ pub fn from_function(func: &Function) -> Gc<Box<LuaClosure>> {
         param_count: func.param_count(),
         args_count: GcCell::new(0),
         args_start: GcCell::new(0),
+        ret_vals: GcCell::new(0),
     }))
 }
 
@@ -136,4 +157,6 @@ pub trait LuaClosure: Trace + Finalize {
     fn reg_count(&self) -> usize;
     fn param_count(&self) -> usize;
     fn call(&self, vm: &mut Vm);
+    fn ret_vals(&self) -> usize;
+    fn set_ret_vals(&self, vals: usize);
 }

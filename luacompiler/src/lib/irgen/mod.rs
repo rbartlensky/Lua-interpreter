@@ -663,6 +663,7 @@ impl<'a> LuaToIR<'a> {
             } if ridx == lua5_3_y::R_ARGS => &nodes[1],
             _ => panic!("Missing node <args> from <functioncall>"),
         };
+        self.functions[self.curr_function].push_instr(HLInstr(Opcode::SetTop, func_reg, 0, 0));
         let exprs = self.get_underlying_exprs(params);
         if exprs.len() > 0 {
             // push the arguments to the function
@@ -956,8 +957,10 @@ mod tests {
                 HLInstr(Opcode::LDS, 2, 1, 0),
                 HLInstr(Opcode::SetAttr, 0, 2, 1),
                 HLInstr(Opcode::GetAttr, 3, 0, 2),
+                HLInstr(Opcode::SetTop, 3, 0, 0),
                 HLInstr(Opcode::CALL, 3, 0, 0),
                 HLInstr(Opcode::GetAttr, 4, 0, 2),
+                HLInstr(Opcode::SetTop, 4, 0, 0),
                 HLInstr(Opcode::CALL, 4, 0, 0),
             ],
             vec![
@@ -988,10 +991,12 @@ mod tests {
                 HLInstr(Opcode::LDS, 2, 1, 0),
                 HLInstr(Opcode::SetAttr, 0, 2, 1),
                 HLInstr(Opcode::GetAttr, 3, 0, 2),
+                HLInstr(Opcode::SetTop, 3, 0, 0),
                 HLInstr(Opcode::LDI, 4, 0, 0),
                 HLInstr(Opcode::PUSH, 4, 0, 0),
                 HLInstr(Opcode::CALL, 3, 1, 0),
                 HLInstr(Opcode::GetAttr, 5, 0, 2),
+                HLInstr(Opcode::SetTop, 5, 0, 0),
                 HLInstr(Opcode::LDS, 6, 0, 0),
                 HLInstr(Opcode::GetAttr, 7, 0, 6),
                 HLInstr(Opcode::PUSH, 7, 0, 0),
@@ -1052,7 +1057,8 @@ mod tests {
                 HLInstr(Opcode::LDS, 2, 0, 0),
                 HLInstr(Opcode::SetAttr, 0, 2, 1), // _ENV["f"] = 1
                 HLInstr(Opcode::GetAttr, 3, 0, 2), // load reference to f
-                HLInstr(Opcode::LDI, 4, 0, 0),     // 1
+                HLInstr(Opcode::SetTop, 3, 0, 0),
+                HLInstr(Opcode::LDI, 4, 0, 0), // 1
                 HLInstr(Opcode::PUSH, 4, 0, 0),
                 HLInstr(Opcode::LDI, 5, 1, 0), // 2
                 HLInstr(Opcode::PUSH, 5, 0, 0),
@@ -1068,8 +1074,9 @@ mod tests {
                 // next register is 6, as VarArg will assign to 4 and 5
                 HLInstr(Opcode::LDS, 6, 0, 0),     // "f"
                 HLInstr(Opcode::GetAttr, 7, 0, 6), // load reference to f
-                HLInstr(Opcode::VarArg, 0, 0, 1),  // push all varargs
-                HLInstr(Opcode::CALL, 7, 1, 0),    // f(...)
+                HLInstr(Opcode::SetTop, 7, 0, 0),
+                HLInstr(Opcode::VarArg, 0, 0, 1), // push all varargs
+                HLInstr(Opcode::CALL, 7, 1, 0),   // f(...)
             ],
         ];
         for i in 0..ir.functions.len() {
@@ -1093,7 +1100,8 @@ mod tests {
                 HLInstr(Opcode::LDS, 2, 3, 0),
                 HLInstr(Opcode::SetAttr, 0, 2, 1), // _ENV["f"] = 1
                 HLInstr(Opcode::GetAttr, 3, 0, 2), // load reference to f
-                HLInstr(Opcode::LDI, 4, 0, 0),     // 1
+                HLInstr(Opcode::SetTop, 3, 0, 0),
+                HLInstr(Opcode::LDI, 4, 0, 0), // 1
                 HLInstr(Opcode::PUSH, 4, 0, 0),
                 HLInstr(Opcode::LDI, 5, 1, 0), // 2
                 HLInstr(Opcode::PUSH, 5, 0, 0),

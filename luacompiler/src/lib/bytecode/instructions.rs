@@ -21,7 +21,7 @@ pub fn third_arg(instr: u32) -> u8 {
 }
 
 /// Create an instruction with the given opcode and arguments.
-pub fn make_instr(opcode: Opcode, arg1: u8, arg2: u8, arg3: u8) -> u32 {
+pub const fn make_instr(opcode: Opcode, arg1: u8, arg2: u8, arg3: u8) -> u32 {
     opcode as u32 + ((arg1 as u32) << 8) + ((arg2 as u32) << 16) + ((arg3 as u32) << 24)
 }
 
@@ -47,6 +47,7 @@ pub fn format_instr(instr: u32) -> String {
         17 => "Eq",
         18 => "MovR",
         19 => "Ret",
+        20 => "SetTop",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(
@@ -106,7 +107,8 @@ pub enum Opcode {
     EQ = 17, // R(1) == R(2)
     // Copy return value RV(2) into R(1); Arg(3) = 1 or 2 => same reasoning as above
     MOVR = 18,
-    RET = 19, // return to the parent frame
+    RET = 19,    // return to the parent frame
+    SetTop = 20, // set R(1)'s `args_start` to the top of the stack
 }
 
 #[cfg(test)]
