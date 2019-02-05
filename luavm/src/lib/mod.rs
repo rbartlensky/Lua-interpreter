@@ -15,7 +15,7 @@ mod stdlib;
 use errors::LuaError;
 use gc::Gc;
 use instructions::{
-    arithmetic_operators::*, functions::*, loads::*, relational_operators::*, tables::*,
+    arithmetic_operators::*, control::*, functions::*, loads::*, relational_operators::*, tables::*,
 };
 use lua_values::{
     lua_closure::{LuaClosure, UserFunction},
@@ -32,7 +32,7 @@ const REG_NUM: usize = 256;
 /// The instruction handler for each opcode.
 const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
     mov, ldi, ldf, lds, add, sub, mul, div, modulus, fdiv, exp, get_attr, set_attr, closure, call,
-    push, vararg, eq, movr, ret, set_top,
+    push, vararg, eq, movr, ret, set_top, jmp_if, jmp,
 ];
 
 /// Represents a `LuaBytecode` interpreter.
@@ -357,5 +357,23 @@ mod tests {
         assert_eq!(vm.env_attrs[index_of_z], LuaVal::from(10));
         assert_eq!(vm.env_attrs[index_of_w], LuaVal::from(20));
         assert_eq!(vm.env_attrs[index_of_w1], LuaVal::new());
+    }
+
+    #[test]
+    fn branching() {
+        let mut vm = get_vm_for(
+            "a = 3
+             if a == 2 then
+                 b = 2
+             else
+                 b = 3
+             end"
+            .to_string(),
+        );
+        vm.eval().unwrap();
+        let index_of_a = 0;
+        let index_of_b = 1;
+        assert_eq!(vm.env_attrs[index_of_a], LuaVal::from(3));
+        assert_eq!(vm.env_attrs[index_of_b], LuaVal::from(3));
     }
 }
