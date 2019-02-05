@@ -214,6 +214,16 @@ impl<'a> LuaToIR<'a> {
                 } if ridx == lua5_3_y::R_FUNCTIONCALL => self.compile_call(&nodes[0], &nodes[1]),
                 _ => {}
             }
+        } else {
+            // stat_nodes = [<IF>, <exp>, <THEN>, <block>, <elselistopt>, <elseopt>, <END>]
+            if utils::is_term(&stat_nodes[0], lua5_3_l::T_IF) {
+                self.compile_if(
+                    &stat_nodes[1],
+                    &stat_nodes[3],
+                    &stat_nodes[4],
+                    &stat_nodes[5],
+                );
+            }
         }
     }
 
@@ -750,6 +760,85 @@ impl<'a> LuaToIR<'a> {
             panic!("Expected a Node::Term!");
         }
     }
+
+    /// Compile an if-statement.
+    fn compile_if(
+        &mut self,
+        expr: &'a Node<u8>,
+        block: &'a Node<u8>,
+        elselistopt: &'a Node<u8>,
+        elseopt: &'a Node<u8>,
+    ) {
+        // the index of the Jmp instructions
+        let mut jmps = vec![];
+        jmps.push(self.compile_branch(expr, block));
+        jmps.extend(self.compile_elselist(elselistopt));
+        // compile the else branch
+        let nodes = get_nodes(elseopt, lua5_3_y::R_ELSEOPT);
+        if nodes.len() > 0 {
+            self.compile_block(&nodes[1]);
+        }
+        let func = &mut self.functions[self.curr_function];
+        // for all the Jmp instructions, update the first argument such that if the
+        // branch is true, the entire if-else statement is skipped
+        let len = func.instrs().len() - 1;
+        for j in jmps {
+            func.get_mut_instr(j).1 = len - j;
+        }
+    }
+
+    /// Compile an if-statement branch; `if <expr> then <block>`.
+    fn compile_branch(&mut self, expr: &'a Node<u8>, block: &'a Node<u8>) -> usize {
+        let reg = self.compile_expr(expr);
+        let jmp_index = self.functions[self.curr_function].instrs().len();
+        // second argument is 0 for now; first we have to see how many instructions we
+        // need to jump over
+        self.functions[self.curr_function].push_instr(HLInstr(Opcode::JmpIf, reg, 0, 0));
+        self.compile_block(block);
+        let new_len = self.functions[self.curr_function].instrs().len();
+        // set the second argument of the JmpIf instruction to the number of new
+        // instructions added
+        self.functions[self.curr_function]
+            .get_mut_instr(jmp_index)
+            .2 = new_len - jmp_index;
+        // if the condition is true, we will jump over all other branches, but we don't
+        // know yet how many branches there are
+        self.functions[self.curr_function].push_instr(HLInstr(Opcode::Jmp, 0, 0, 0));
+        new_len
+    }
+
+    /// Compile an <elselist> or <elselistopt>.
+    fn compile_elselist(&mut self, elselistopt: &'a Node<u8>) -> Vec<usize> {
+        let mut instrs = vec![];
+        match *elselistopt {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_ELSELISTOPT => {
+                if nodes.len() > 0 {
+                    instrs.extend(self.compile_elselist(&nodes[0]));
+                }
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_ELSELIST => {
+                // nodes = [<elselist>, <ELSEIF>, <exp>, <THEN>, <block>]
+                if nodes.len() > 4 {
+                    instrs.extend(self.compile_elselist(&nodes[0]));
+                    instrs.push(self.compile_branch(&nodes[2], &nodes[4]));
+                } else {
+                    // nodes = [<ELSEIF>, <exp>, <THEN>, <block>]
+                    instrs.push(self.compile_branch(&nodes[1], &nodes[3]));
+                }
+            }
+            _ => panic!(
+                "Expected an <elselist> or <elselistopt>, but got {:#?}",
+                elselistopt
+            ),
+        }
+        instrs
+    }
 }
 
 #[cfg(test)]
@@ -1183,6 +1272,43 @@ mod tests {
                 HLInstr(Opcode::SetAttr, 0, 7, 4), // _ENV["z"] = nil
             ],
         ];
+        for i in 0..ir.functions.len() {
+            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+        }
+    }
+
+    #[test]
+    fn generate_if_statements() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a, b = 2
+             if a == 1 then
+                 a, b = 2
+             elseif a == 2 then
+                 b = 3
+             else
+                 b = 4
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![vec![
+            HLInstr(Opcode::LDI, 1, 0, 0),
+            HLInstr(Opcode::LDI, 3, 1, 0),
+            HLInstr(Opcode::EQ, 4, 1, 3),
+            HLInstr(Opcode::JmpIf, 4, 4, 0),
+            HLInstr(Opcode::LDI, 5, 0, 0),
+            HLInstr(Opcode::MOV, 1, 5, 0),
+            HLInstr(Opcode::MOV, 2, 6, 0),
+            HLInstr(Opcode::Jmp, 8, 0, 0),
+            HLInstr(Opcode::LDI, 7, 0, 0),
+            HLInstr(Opcode::EQ, 8, 1, 7),
+            HLInstr(Opcode::JmpIf, 8, 3, 0),
+            HLInstr(Opcode::LDI, 9, 2, 0),
+            HLInstr(Opcode::MOV, 2, 9, 0),
+            HLInstr(Opcode::Jmp, 2, 0, 0),
+            HLInstr(Opcode::LDI, 10, 3, 0),
+            HLInstr(Opcode::MOV, 2, 10, 0),
+        ]];
         for i in 0..ir.functions.len() {
             check_eq(ir.functions[i].instrs(), &expected_instrs[i])
         }

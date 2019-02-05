@@ -48,6 +48,8 @@ pub fn format_instr(instr: u32) -> String {
         18 => "MovR",
         19 => "Ret",
         20 => "SetTop",
+        21 => "JmpIf",
+        22 => "Jmp",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(
@@ -109,6 +111,8 @@ pub enum Opcode {
     MOVR = 18,
     RET = 19,    // return to the parent frame
     SetTop = 20, // set R(1)'s `args_start` to the top of the stack
+    JmpIf = 21,  // if R(1) == true then vm.pc += Arg(2)
+    Jmp = 22,    // vm.pc += Arg(1)
 }
 
 #[cfg(test)]
