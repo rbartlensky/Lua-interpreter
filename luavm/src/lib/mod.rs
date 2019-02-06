@@ -92,7 +92,7 @@ impl Vm {
     }
 
     /// Evaluate the program.
-    pub fn eval(&mut self) {
+    pub fn eval(&mut self) -> Result<(), LuaError> {
         self.pc = 0;
         let len = self
             .bytecode
@@ -103,10 +103,10 @@ impl Vm {
                 .bytecode
                 .get_function(self.closure.index())
                 .get_instr(self.pc);
-            println!("Executing {}", format_instr(instr));
-            (OPCODE_HANDLER[opcode(instr) as usize])(self, instr).unwrap();
+            (OPCODE_HANDLER[opcode(instr) as usize])(self, instr)?;
             self.pc += 1;
         }
+        Ok(())
     }
 
     pub fn push(&mut self, val: LuaVal) {
@@ -139,7 +139,7 @@ mod tests {
              y = x + 1"
                 .to_string(),
         );
-        vm.eval();
+        vm.eval().unwrap();
         let index_of_x = 0;
         // vm.registers[0] has a reference to the _ENV variable
         // this is true because the compiler always loads the environment into register 0
@@ -170,7 +170,7 @@ mod tests {
              f()"
             .to_string(),
         );
-        vm.eval();
+        vm.eval().unwrap();
         let index_of_x = 0;
         // env is correctly updated
         assert_eq!(vm.env_attrs[index_of_x], LuaVal::from(3));
@@ -186,7 +186,7 @@ mod tests {
              f(3)"
                 .to_string(),
         );
-        vm.eval();
+        vm.eval().unwrap();
         let index_of_x = 0;
         // env is correctly updated
         assert_eq!(vm.env_attrs[index_of_x], LuaVal::from(3));
@@ -202,7 +202,7 @@ mod tests {
              f(3, 4, 5)"
                 .to_string(),
         );
-        vm.eval();
+        vm.eval().unwrap();
         let index_of_x = 0;
         // env is correctly updated
         assert_eq!(vm.env_attrs[index_of_x], LuaVal::from(3));
@@ -218,7 +218,7 @@ mod tests {
              f()"
             .to_string(),
         );
-        vm.eval();
+        vm.eval().unwrap();
         let index_of_x = 0;
         // env is correctly updated
         assert_eq!(vm.env_attrs[index_of_x], LuaVal::new());
@@ -234,7 +234,7 @@ mod tests {
              f(1, 2, 3)"
                 .to_string(),
         );
-        vm.eval();
+        vm.eval().unwrap();
         let index_of_x = 0;
         let index_of_y = 1;
         let index_of_z = 2;
@@ -256,7 +256,7 @@ mod tests {
              z, w = f(10, 4), 5"
                 .to_string(),
         );
-        vm.eval();
+        vm.eval().unwrap();
         assert_eq!(vm.top, 0);
         let index_of_x = 1;
         let index_of_y = 2;
@@ -282,7 +282,7 @@ mod tests {
              w1, w2 = f(10), 10"
                 .to_string(),
         );
-        vm.eval();
+        vm.eval().unwrap();
         let index_of_x = 2;
         let index_of_y = 3;
         let index_of_z = 4;
@@ -312,7 +312,7 @@ mod tests {
              w1, w2 = f(11, 12, 13), 10"
                 .to_string(),
         );
-        vm.eval();
+        vm.eval().unwrap();
         let index_of_x = 2;
         let index_of_y = 3;
         let index_of_z = 4;
@@ -344,7 +344,7 @@ mod tests {
              x, y, z, w, w1 = h(g(2, 3))"
                 .to_string(),
         );
-        vm.eval();
+        vm.eval().unwrap();
         let index_of_x = 3;
         let index_of_y = 4;
         let index_of_z = 5;

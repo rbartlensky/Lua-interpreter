@@ -67,7 +67,7 @@ mod tests {
         // LDS     2 0 0
         // SetAttr 0 2 1
         let mut vm = get_vm_for("x = 2".to_string());
-        vm.eval(); // so that the registers are updated based on the supplied program
+        vm.eval().unwrap(); // so that the registers are updated based on the supplied program
         assert!(get_attr(&mut vm, make_instr(Opcode::GetAttr, 1, ENV_REG as u8, 2)).is_ok());
         assert_eq!(vm.registers[1], LuaVal::from(2));
     }
@@ -79,7 +79,7 @@ mod tests {
         // LDS     2 0 0
         // SetAttr 0 2 1
         let mut vm = get_vm_for("x = 2".to_string());
-        vm.eval(); // so that the registers are updated based on the supplied program
+        vm.eval().unwrap(); // so that the registers are updated based on the supplied program
         assert!(set_attr(&mut vm, make_instr(Opcode::SetAttr, ENV_REG as u8, 2, 1)).is_ok());
         let index_of_x = 0;
         assert_eq!(

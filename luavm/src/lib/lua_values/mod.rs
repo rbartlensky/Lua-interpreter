@@ -122,6 +122,14 @@ impl LuaVal {
         }
     }
 
+    pub fn to_bool(&self) -> bool {
+        match self.kind() {
+            LuaValKind::NIL => false,
+            LuaValKind::BOOL => (self.val >> tagging::TAG_SHIFT) != 0,
+            _ => true,
+        }
+    }
+
     fn get_string_ref(&self) -> Option<&str> {
         match self.kind() {
             LuaValKind::BOXED => unsafe { (*self.as_boxed()).get_string_ref() },

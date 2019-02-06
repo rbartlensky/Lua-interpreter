@@ -73,7 +73,7 @@ pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
         index_of_arg += 1;
     }
     // jump to the called function
-    vm.closure.clone().call(vm);
+    vm.closure.clone().call(vm)?;
     // the called function might have pushed some return values; the exact number is
     // encoded by <ret_vals>
     let ret_vals = vm.closure.ret_vals();
