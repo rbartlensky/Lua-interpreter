@@ -67,12 +67,20 @@ impl<'a> CompiledFunc<'a> {
         &mut self.basic_blocks[i]
     }
 
+    pub fn reg_count(&self) -> usize {
+        self.reg_map.reg_count()
+    }
+
     pub fn reg_map(&mut self) -> &mut RegisterMap<'a> {
         &mut self.reg_map
     }
 
     pub fn is_vararg(&self) -> bool {
         self.is_vararg
+    }
+
+    pub fn set_vararg(&mut self, v: bool) {
+        self.is_vararg = v;
     }
 
     pub fn param_count(&self) -> usize {

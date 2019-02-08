@@ -1,5 +1,4 @@
 pub mod compiled_func;
-pub mod constants_map;
 pub mod instr;
 pub mod lua_ir;
 pub mod register_map;
@@ -26,9 +25,9 @@ pub fn compile_to_ir(pt: &LuaParseTree) -> LuaIR {
 enum AssignmentType {
     /// Whether the assignment is a local one: `local a ...`.
     LocalDecl = 0,
-    /// If the update of _ENV should be postponed and handled by the caller.
+    /// The environment will be updated by the caller.
     Postponed = 1,
-    /// If the variable is global, code for _ENV[name] = val is emitted
+    /// If the variable is global, then the environment is updated as well.
     Regular = 2,
 }
 
@@ -38,7 +37,6 @@ enum VariableType {
 }
 
 /// Represents a compiler which translates a given Lua parse tree to an SSA IR.
-/// The compiler assumes that the `_ENV` variable is always stored in register 0!
 struct LuaToIR<'a> {
     pt: &'a LuaParseTree,
     functions: Vec<CompiledFunc<'a>>,
@@ -149,7 +147,14 @@ impl<'a> LuaToIR<'a> {
             // no need to keep the previously allocated register
             self.curr_reg_map().pop_last_reg();
         } else {
-            self.push_instr(Opcode::PUSH, vec![Arg::Reg(reg)]);
+            if increment_ret_vals {
+                self.push_instr(
+                    Opcode::PUSH,
+                    vec![Arg::Reg(reg), Arg::Some(0), Arg::Some(1)],
+                );
+            } else {
+                self.push_instr(Opcode::PUSH, vec![Arg::Reg(reg)]);
+            }
         }
     }
 
@@ -433,10 +438,7 @@ impl<'a> LuaToIR<'a> {
                 let mut param_count = param_nodes.len();
                 let is_vararg =
                     param_count > 0 && is_term(param_nodes.last().unwrap(), lua5_3_l::T_DOTDOTDOT);
-                if is_vararg {
-                    param_count -= 1;
-                }
-                let new_func = CompiledFunc::new(param_count, is_vararg);
+                let new_func = CompiledFunc::new(0, is_vararg);
                 self.functions.push(new_func);
                 self.curr_func = new_func_id;
                 self.curr_reg_map().push_block();
@@ -587,7 +589,7 @@ impl<'a> LuaToIR<'a> {
 
     /// Compile a <parlist> node, and assign each name a register in the current
     /// register map.
-    /// The first parameter of a function is assigned to register 1, and so on.
+    /// The first parameter of a function is assigned to register 0, and so on.
     /// For now the vararg parameter is ignored.
     fn compile_param_list(&mut self, params: &Node<u8>) {
         match *params {
@@ -612,6 +614,7 @@ impl<'a> LuaToIR<'a> {
                         _ => {}
                     }
                 }
+                self.functions[self.curr_func].set_param_count(names.len());
                 let mut reg_map = self.curr_reg_map();
                 for name in names {
                     reg_map.create_reg(name);
