@@ -48,6 +48,8 @@ pub fn format_instr(instr: u32) -> String {
         18 => "MovR",
         19 => "Ret",
         20 => "SetTop",
+        21 => "GetUpAttr",
+        22 => "SetUpAttr",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(
@@ -107,8 +109,10 @@ pub enum Opcode {
     EQ = 17, // R(1) == R(2)
     // Copy return value RV(2) into R(1); Arg(3) = 1 or 2 => same reasoning as above
     MOVR = 18,
-    RET = 19,    // return to the parent frame
-    SetTop = 20, // set R(1)'s `args_start` to the top of the stack
+    RET = 19,       // return to the parent frame
+    SetTop = 20,    // set R(1)'s `args_start` to the top of the stack
+    GetUpAttr = 21, // R(1) = Upvals[Arg(2)][Arg(3)]
+    SetUpAttr = 22, // Upvals[Arg(1)][Arg(2)] = R(3)
 }
 
 #[cfg(test)]

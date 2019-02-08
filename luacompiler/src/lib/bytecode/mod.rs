@@ -2,7 +2,7 @@ pub mod instructions;
 
 use self::instructions::format_instr;
 use bincode::{deserialize, serialize};
-use irgen::{compiled_func::CompiledFunc, constants_map::ConstantsMap};
+use irgen::constants_map::ConstantsMap;
 use std::{
     fmt,
     fs::File,
@@ -22,6 +22,16 @@ pub struct Function {
 }
 
 impl Function {
+    pub fn new() -> Function {
+        Function {
+            index: 0,
+            functions: vec![],
+            reg_count: 0,
+            param_count: 0,
+            instrs: vec![],
+        }
+    }
+
     /// Create a function which holds the given instructions.
     pub fn from_u32_instrs(instrs: Vec<u32>) -> Function {
         Function {
@@ -58,21 +68,6 @@ impl Function {
 
     pub fn param_count(&self) -> usize {
         self.param_count
-    }
-}
-
-impl<'a> From<CompiledFunc<'a>> for Function {
-    fn from(func: CompiledFunc) -> Function {
-        let mut new_function = Function {
-            index: func.index(),
-            reg_count: func.reg_map().reg_count(),
-            param_count: func.param_count(),
-            functions: vec![],
-            instrs: vec![],
-        };
-        new_function.instrs = func.instrs().iter().map(|i| i.as_32bit()).collect();
-        new_function.functions = func.extract_functions();
-        new_function
     }
 }
 
