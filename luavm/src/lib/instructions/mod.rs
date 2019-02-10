@@ -3,3 +3,4 @@ pub mod functions;
 pub mod loads;
 pub mod relational_operators;
 pub mod tables;
+pub mod upvals;

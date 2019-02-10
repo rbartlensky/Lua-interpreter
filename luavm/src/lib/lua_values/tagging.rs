@@ -52,8 +52,8 @@ pub fn to_raw_ptr<T>(val: T) -> usize {
 }
 
 /// Untags the given pointer, and returns a mutable pointer to Gc<LuaTable>.
-pub fn table_ptr(encoded_ptr: usize) -> *mut Gc<LuaTable> {
-    (encoded_ptr ^ LuaValKind::TABLE as usize) as *mut Gc<LuaTable>
+pub fn table_ptr(encoded_ptr: usize) -> *mut Gc<Box<LuaTable>> {
+    (encoded_ptr ^ LuaValKind::TABLE as usize) as *mut Gc<Box<LuaTable>>
 }
 
 /// Untags the given pointer, and returns a mutable pointer to Gc<LuaClosure>.

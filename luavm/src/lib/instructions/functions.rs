@@ -1,5 +1,5 @@
 use errors::LuaError;
-use lua_values::LuaVal;
+use lua_values::{lua_closure::UserFunction, LuaVal};
 use luacompiler::bytecode::instructions::*;
 use luacompiler::bytecode::instructions::{first_arg, second_arg};
 use Vm;
@@ -7,11 +7,14 @@ use Vm;
 // R(1) = Closure(curr_function.child(R(2)).index())
 pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     // Take the index of the function which is the child of the current function
-    let index = vm
-        .bytecode
-        .get_function(vm.closure.index())
-        .get_func_index(second_arg(instr) as usize);
-    vm.registers[first_arg(instr) as usize] = LuaVal::from(vm.bytecode.get_function(index));
+    let func = vm.bytecode.get_function(second_arg(instr) as usize);
+    let ufunc = UserFunction::new(
+        func.index(),
+        func.reg_count(),
+        func.param_count(),
+        vec![vm.env.clone()],
+    );
+    vm.registers[first_arg(instr) as usize] = LuaVal::from(ufunc);
     Ok(())
 }
 
@@ -54,7 +57,7 @@ pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     vm.closure.set_args_count(args_count);
     // push the first `reg_count` registers to the stack, as the called function
     // will modify these
-    for i in 1..vm.closure.reg_count() {
+    for i in 0..vm.closure.reg_count() {
         let reg = vm.registers[i].clone();
         vm.push(reg);
     }
@@ -65,7 +68,7 @@ pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     for i in 0..vm.closure.param_count() {
         // if the caller didn't push enough arguments, we have to set the remaining
         // parameter registers to nil, so that we don't use some value from the old frame
-        vm.registers[i + 1] = if i < args_count {
+        vm.registers[i] = if i < args_count {
             vm.stack[index_of_arg].clone()
         } else {
             LuaVal::new()
@@ -79,7 +82,7 @@ pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     let ret_vals = vm.closure.ret_vals();
     // restore the registers of the caller
     for (reg, i) in ((args_start + args_count)..(vm.top - ret_vals)).enumerate() {
-        std::mem::swap(&mut vm.registers[reg + 1], &mut vm.stack[i]);
+        std::mem::swap(&mut vm.registers[reg], &mut vm.stack[i]);
     }
     // restore the state of the caller
     vm.closure.set_ret_vals(0);
@@ -154,23 +157,15 @@ pub fn vararg(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
                 .set_ret_vals(ret_val + args_count - vm.closure.param_count());
         }
     } else {
-        let param_count = vm.bytecode.get_function(vm.closure.index()).param_count();
-        // where they start on the stack
-        let args_start = vm.closure.args_start();
-        let mut var_args_start = args_start + param_count;
-        let var_args_end = args_start + vm.closure.args_count();
-        // The first register which receives a cloned value from varargs
-        let start_reg = first_arg(instr) as usize;
-        // second operand tells us how many registers we have to assign
-        for r in start_reg..(start_reg + second_arg(instr) as usize) {
-            // in the case where we don't have enough arguments to unpack generate Nils
-            vm.registers[r] = if var_args_start < var_args_end {
-                vm.stack[var_args_start].clone()
+        let var_args_start = vm.closure.args_start() + vm.closure.param_count();
+        let from = second_arg(instr) as usize;
+        // if we don't have enough varargs to unpack, we return nils
+        vm.registers[first_arg(instr) as usize] =
+            if var_args_start + from < vm.closure.args_start() + vm.closure.args_count() {
+                vm.stack[var_args_start + from].clone()
             } else {
                 LuaVal::new()
             };
-            var_args_start += 1;
-        }
     }
     Ok(())
 }
