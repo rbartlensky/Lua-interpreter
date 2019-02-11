@@ -3,12 +3,23 @@ use super::register_map::RegisterMap;
 use irgen::opcodes::IROpcode;
 
 pub struct BasicBlock {
+    parents: Vec<usize>,
     instrs: Vec<Instr>,
 }
 
 impl BasicBlock {
     pub fn new() -> BasicBlock {
-        BasicBlock { instrs: vec![] }
+        BasicBlock {
+            parents: vec![],
+            instrs: vec![],
+        }
+    }
+
+    pub fn with_parents(parents: Vec<usize>) -> BasicBlock {
+        BasicBlock {
+            parents,
+            instrs: vec![],
+        }
     }
 
     pub fn push_instr(&mut self, opcode: IROpcode, args: Vec<Arg>) {
@@ -32,6 +43,18 @@ impl BasicBlock {
             }
         }
         &mut self.instrs[index]
+    }
+
+    pub fn parents(&self) -> &Vec<usize> {
+        &self.parents
+    }
+
+    pub fn set_parents(&mut self, parents: Vec<usize>) {
+        self.parents = parents;
+    }
+
+    pub fn push_parent(&mut self, parent: usize) {
+        self.parents.push(parent);
     }
 }
 
@@ -60,6 +83,11 @@ impl<'a> CompiledFunc<'a> {
 
     pub fn create_block(&mut self) -> usize {
         self.basic_blocks.push(BasicBlock::new());
+        self.basic_blocks.len() - 1
+    }
+
+    pub fn create_block_with_parents(&mut self, parents: Vec<usize>) -> usize {
+        self.basic_blocks.push(BasicBlock::with_parents(parents));
         self.basic_blocks.len() - 1
     }
 

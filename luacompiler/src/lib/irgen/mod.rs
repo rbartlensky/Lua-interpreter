@@ -76,12 +76,12 @@ impl<'a> LuaToIR<'a> {
         self.functions[self.curr_func].get_block(i)
     }
 
-    fn push_instr(&mut self, op: IROpcode, args: Vec<Arg>) {
-        self.curr_block().push_instr(op, args);
+    fn get_block(&mut self, i: usize) -> &mut BasicBlock {
+        self.functions[self.curr_func].get_block(i)
     }
 
-    fn push_instr_to_block(&mut self, op: IROpcode, args: Vec<Arg>, i: usize) {
-        self.curr_func().get_block(i).push_instr(op, args);
+    fn push_instr(&mut self, op: IROpcode, args: Vec<Arg>) {
+        self.curr_block().push_instr(op, args);
     }
 
     /// Compile a <block>.
@@ -95,7 +95,10 @@ impl<'a> LuaToIR<'a> {
     /// Compiles a block in the current scope. This means that the user must
     /// manully push/pop a new scope, if necessary.
     fn compile_block_without_scope(&mut self, node: &'a Node<u8>) -> usize {
-        let index = self.curr_func().create_block();
+        let parent_block = self.curr_block;
+        let index = self
+            .curr_func()
+            .create_block_with_parents(vec![parent_block]);
         self.compile_block_in_basic_block(node, index);
         index
     }
@@ -250,6 +253,16 @@ impl<'a> LuaToIR<'a> {
                     ref nodes,
                 } if ridx == lua5_3_y::R_FUNCTIONCALL => self.compile_call(&nodes[0], &nodes[1]),
                 _ => {}
+            }
+        } else {
+            // stat_nodes = [<IF>, <exp>, <THEN>, <block>, <elselistopt>, <elseopt>, <END>]
+            if utils::is_term(&stat_nodes[0], lua5_3_l::T_IF) {
+                self.compile_if(
+                    &stat_nodes[1],
+                    &stat_nodes[3],
+                    &stat_nodes[4],
+                    &stat_nodes[5],
+                );
             }
         }
     }
@@ -720,6 +733,104 @@ impl<'a> LuaToIR<'a> {
             panic!("Expected a Node::Term!");
         }
     }
+
+    /// Compile an if-statement.
+    fn compile_if(
+        &mut self,
+        expr: &'a Node<u8>,
+        block: &'a Node<u8>,
+        elselistopt: &'a Node<u8>,
+        elseopt: &'a Node<u8>,
+    ) {
+        let before_if_index = self.curr_block;
+        let elselist = self.get_elselist(elselistopt);
+        let mut branches: Vec<usize> = vec![(expr, block)]
+            .iter()
+            .chain(elselist.iter())
+            .map(|(e, b)| {
+                // compile if condition
+                let expr_res = self.compile_expr(e);
+                // compile true branch as a child of the current block
+                let true_block = self.compile_block(b);
+                let last_true_block = self.curr_func().blocks().len() - 1;
+                // create a new block
+                let parent = self.curr_block;
+                let elif_block = self.curr_func().create_block_with_parents(vec![parent]);
+                self.push_instr(
+                    IROpcode::Branch,
+                    vec![
+                        Arg::Reg(expr_res),
+                        Arg::Some(true_block),
+                        Arg::Some(elif_block),
+                    ],
+                );
+                self.curr_block = elif_block;
+                last_true_block
+            })
+            .collect();
+        let else_nodes = get_nodes(elseopt, lua5_3_y::R_ELSEOPT);
+        let process_else = else_nodes.len() > 0;
+        if process_else {
+            let else_block = self.curr_block;
+            self.compile_block_in_basic_block(&else_nodes[1], else_block);
+            branches.push(else_block);
+            self.curr_reg_map().pop_block(else_block);
+            self.curr_block = self.curr_func().create_block();
+            self.curr_reg_map().push_block();
+        }
+        for &branch in &branches {
+            let curr = self.curr_block;
+            self.get_block(branch)
+                .push_instr(IROpcode::Branch, vec![Arg::Some(curr)]);
+            self.get_block(curr).push_parent(branch);
+        }
+        if !process_else {
+            branches.push(self.curr_block().parents()[0]);
+        }
+        let mut phi_args: Vec<Arg> = self
+            .curr_block()
+            .parents()
+            .iter()
+            .map(|&p| Arg::Some(p))
+            .collect();
+        if !phi_args.contains(&Arg::Some(before_if_index)) {
+            phi_args.push(Arg::Some(before_if_index));
+        }
+        self.push_instr(IROpcode::Phi, phi_args);
+    }
+
+    /// Compile an <elselist> or <elselistopt>.
+    fn get_elselist(&mut self, elselistopt: &'a Node<u8>) -> Vec<(&'a Node<u8>, &'a Node<u8>)> {
+        let mut blocks = vec![];
+        match *elselistopt {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_ELSELISTOPT => {
+                if nodes.len() > 0 {
+                    blocks.extend(self.get_elselist(&nodes[0]));
+                }
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_ELSELIST => {
+                // nodes = [<elselist>, <ELSEIF>, <exp>, <THEN>, <block>]
+                if nodes.len() > 4 {
+                    blocks.extend(self.get_elselist(&nodes[0]));
+                    blocks.push((&nodes[2], &nodes[4]));
+                } else {
+                    // nodes = [<ELSEIF>, <exp>, <THEN>, <block>]
+                    blocks.push((&nodes[1], &nodes[3]));
+                }
+            }
+            _ => panic!(
+                "Expected an <elselist> or <elselistopt>, but got {:#?}",
+                elselistopt
+            ),
+        }
+        blocks
+    }
 }
 
 #[cfg(test)]
@@ -727,13 +838,38 @@ mod tests {
     use super::instr::Arg::*;
     use super::instr::Instr;
     use super::*;
-    use bytecode::instructions::Opcode::*;
     use std::fmt::Debug;
 
     fn check_eq<T: Debug + PartialEq>(output: &Vec<T>, expected: &Vec<T>) {
         assert_eq!(output.len(), expected.len());
         for (lhs, rhs) in output.iter().zip(expected.iter()) {
-            assert_eq!(lhs, rhs);
+            assert_eq!(lhs, rhs, "{:?} != {:?}", lhs, rhs);
+        }
+    }
+
+    fn check_instrs_and_parents(
+        ir: &LuaIR,
+        num_of_funcs: usize,
+        expected_instrs: &Vec<Vec<Instr>>,
+        expected_parents: &Vec<Vec<usize>>,
+    ) {
+        assert!(ir.functions.len() == num_of_funcs);
+        for i in 0..ir.functions.len() {
+            let blocks = ir.functions[i].blocks();
+            assert!(
+                blocks.len() == expected_instrs.len(),
+                "len: {}; expected: {}",
+                blocks.len(),
+                expected_instrs.len()
+            );
+            for i in 0..blocks.len() {
+                let block = &blocks[i];
+                println!("{:?} ; {:?}", block.parents(), &expected_parents[i]);
+                check_eq(block.parents(), &expected_parents[i]);
+                println!("{:?}\n{:?}", block.instrs(), &expected_instrs[i]);
+                println!("------------");
+                check_eq(block.instrs(), &expected_instrs[i]);
+            }
         }
     }
 
@@ -1140,5 +1276,236 @@ mod tests {
             assert!(blocks.len() == 1);
             check_eq(blocks[0].instrs(), &expected_instrs[i])
         }
+    }
+
+    #[test]
+    fn simple_if_else() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a = 1
+             if a then
+               local b = 2
+             else
+               local c = 2
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(0), Int(1)]),
+                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(2)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(1), Int(2)]),
+                Instr::new(IROpcode::Branch, vec![Some(3)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(2)]),
+                Instr::new(IROpcode::Branch, vec![Some(3)]),
+            ],
+            vec![Instr::new(IROpcode::Phi, vec![Some(1), Some(2), Some(0)])],
+        ];
+        let expected_parents = vec![vec![0], vec![0], vec![0], vec![1, 2]];
+        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+    }
+
+    #[test]
+    fn simple_if() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a = 1
+             if a then
+               local b = 2
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(0), Int(1)]),
+                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(2)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(1), Int(2)]),
+                Instr::new(IROpcode::Branch, vec![Some(2)]),
+            ],
+            vec![Instr::new(IROpcode::Phi, vec![Some(0), Some(1)])],
+        ];
+        let expected_parents = vec![vec![0], vec![0], vec![0, 1]];
+        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+    }
+
+    #[test]
+    fn multiple_ifelse() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a, b, c
+             if a then
+               local b = 2
+             elseif b then
+               local b = 3
+             elseif c then
+               local b = 4
+             else
+               local b = 5
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(0), Nil]),
+                Instr::new(IROpcode::from(MOV), vec![Reg(1), Nil]),
+                Instr::new(IROpcode::from(MOV), vec![Reg(2), Nil]),
+                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(2)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(3), Int(2)]),
+                Instr::new(IROpcode::Branch, vec![Some(7)]),
+            ],
+            vec![Instr::new(IROpcode::Branch, vec![Reg(1), Some(3), Some(4)])],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(4), Int(3)]),
+                Instr::new(IROpcode::Branch, vec![Some(7)]),
+            ],
+            vec![Instr::new(IROpcode::Branch, vec![Reg(2), Some(5), Some(6)])],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(5), Int(4)]),
+                Instr::new(IROpcode::Branch, vec![Some(7)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(6), Int(5)]),
+                Instr::new(IROpcode::Branch, vec![Some(7)]),
+            ],
+            vec![Instr::new(
+                IROpcode::Phi,
+                vec![Some(1), Some(3), Some(5), Some(6), Some(0)],
+            )],
+        ];
+        let expected_parents = vec![
+            vec![0],
+            vec![0],
+            vec![0],
+            vec![2],
+            vec![2],
+            vec![4],
+            vec![4],
+            vec![1, 3, 5, 6],
+        ];
+        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+    }
+
+    #[test]
+    fn ifelse_without_else() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a, b
+             if a then
+               local b = 2
+             elseif b then
+               local b = 3
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(0), Nil]),
+                Instr::new(IROpcode::from(MOV), vec![Reg(1), Nil]),
+                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(2)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(2)]),
+                Instr::new(IROpcode::Branch, vec![Some(4)]),
+            ],
+            vec![Instr::new(IROpcode::Branch, vec![Reg(1), Some(3), Some(4)])],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(3), Int(3)]),
+                Instr::new(IROpcode::Branch, vec![Some(4)]),
+            ],
+            vec![Instr::new(
+                IROpcode::Phi,
+                vec![Some(2), Some(1), Some(3), Some(0)],
+            )],
+        ];
+        let expected_parents = vec![vec![0], vec![0], vec![0], vec![2], vec![2, 1, 3]];
+        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+    }
+
+    #[test]
+    fn nested_ifs() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a, b
+             if a then
+               local b = 2
+               if b then
+                 local c = 3
+               end
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(0), Nil]),
+                Instr::new(IROpcode::from(MOV), vec![Reg(1), Nil]),
+                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(4)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(2)]),
+                Instr::new(IROpcode::Branch, vec![Reg(2), Some(2), Some(3)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(3), Int(3)]),
+                Instr::new(IROpcode::Branch, vec![Some(3)]),
+            ],
+            vec![
+                Instr::new(IROpcode::Phi, vec![Some(1), Some(2)]),
+                Instr::new(IROpcode::Branch, vec![Some(4)]),
+            ],
+            vec![Instr::new(IROpcode::Phi, vec![Some(0), Some(3)])],
+        ];
+        let expected_parents = vec![vec![0], vec![0], vec![1], vec![1, 2], vec![0, 3]];
+        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+    }
+
+    #[test]
+    fn nested_ifs_with_else() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a, b
+             if a then
+               local b = 2
+               if b then
+                 local c = 3
+               else
+                 local d = 4
+               end
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(0), Nil]),
+                Instr::new(IROpcode::from(MOV), vec![Reg(1), Nil]),
+                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(5)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(2)]),
+                Instr::new(IROpcode::Branch, vec![Reg(2), Some(2), Some(3)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(3), Int(3)]),
+                Instr::new(IROpcode::Branch, vec![Some(4)]),
+            ],
+            vec![
+                Instr::new(IROpcode::from(MOV), vec![Reg(4), Int(4)]),
+                Instr::new(IROpcode::Branch, vec![Some(4)]),
+            ],
+            vec![
+                Instr::new(IROpcode::Phi, vec![Some(2), Some(3), Some(1)]),
+                Instr::new(IROpcode::Branch, vec![Some(5)]),
+            ],
+            vec![Instr::new(IROpcode::Phi, vec![Some(0), Some(4)])],
+        ];
+        let expected_parents = vec![vec![0], vec![0], vec![1], vec![1], vec![2, 3], vec![0, 4]];
+        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
     }
 }
