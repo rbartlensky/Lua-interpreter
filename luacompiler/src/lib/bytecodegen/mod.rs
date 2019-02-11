@@ -7,6 +7,7 @@ use bytecode::{
 };
 use irgen::instr::Arg;
 use irgen::lua_ir::LuaIR;
+use irgen::opcodes::IROpcode;
 
 pub fn compile_to_bytecode(ir: LuaIR) -> LuaBytecode {
     LuaIRToLuaBc::new(ir).compile()
@@ -50,7 +51,11 @@ impl<'a> LuaIRToLuaBc<'a> {
         let last_reg = self.ir.functions[f].reg_count() as u8;
         let instr = &self.ir.functions[f].get_block(bb).instrs()[i];
         let args = &instr.args;
-        match instr.opcode {
+        let opcode = match instr.opcode {
+            IROpcode::Opcode(o) => o,
+            _ => unreachable!(""),
+        };
+        match opcode {
             MOV => {
                 let (opcode, arg2) = match instr.args[1] {
                     Arg::Reg(reg) => (MOV, reg),
@@ -62,44 +67,39 @@ impl<'a> LuaIRToLuaBc<'a> {
                 vec![make_instr(opcode, args[0].get_reg() as u8, arg2 as u8, 0)]
             }
             ADD | SUB | MUL | DIV | MOD | FDIV | EXP | EQ => vec![make_instr(
-                instr.opcode,
+                opcode,
                 args[0].get_reg() as u8,
                 args[1].get_reg() as u8,
                 args[2].get_reg() as u8,
             )],
             CLOSURE => vec![make_instr(
-                instr.opcode,
+                opcode,
                 args[0].get_reg() as u8,
                 args[1].get_func() as u8,
                 0,
             )],
-            CALL | SetTop => vec![make_instr(instr.opcode, args[0].get_reg() as u8, 0, 0)],
+            CALL | SetTop => vec![make_instr(opcode, args[0].get_reg() as u8, 0, 0)],
             PUSH => vec![if instr.args.len() == 1 {
-                make_instr(instr.opcode, args[0].get_reg() as u8, 0, 0)
+                make_instr(opcode, args[0].get_reg() as u8, 0, 0)
             } else {
                 make_instr(
-                    instr.opcode,
+                    opcode,
                     args[0].get_reg() as u8,
                     args[1].get_some() as u8,
                     args[2].get_some() as u8,
                 )
             }],
             VarArg | MOVR => vec![if instr.args.len() == 2 {
-                make_instr(
-                    instr.opcode,
-                    args[0].get_reg() as u8,
-                    args[1].get_some() as u8,
-                    0,
-                )
+                make_instr(opcode, args[0].get_reg() as u8, args[1].get_some() as u8, 0)
             } else {
-                make_instr(instr.opcode, 0, 0, args[2].get_some() as u8)
+                make_instr(opcode, 0, 0, args[2].get_some() as u8)
             }],
-            RET => vec![make_instr(instr.opcode, 0, 0, 0)],
+            RET => vec![make_instr(opcode, 0, 0, 0)],
             GetUpAttr => {
                 let reg = args[0].get_reg() as u8;
                 vec![
                     make_instr(LDS, reg, self.const_map.get_str(args[2].get_str()) as u8, 0),
-                    make_instr(instr.opcode, reg as u8, args[1].get_some() as u8, reg),
+                    make_instr(opcode, reg as u8, args[1].get_some() as u8, reg),
                 ]
             }
             SetUpAttr => {
@@ -111,13 +111,10 @@ impl<'a> LuaIRToLuaBc<'a> {
                         self.const_map.get_str(args[1].get_str()) as u8,
                         0,
                     ),
-                    make_instr(instr.opcode, args[0].get_some() as u8, last_reg, reg),
+                    make_instr(opcode, args[0].get_some() as u8, last_reg, reg),
                 ]
             }
-            _ => panic!(
-                "Opcode {:?} cannot be compiled at the moment!",
-                instr.opcode
-            ),
+            _ => panic!("Opcode {:?} cannot be compiled at the moment!", opcode),
         }
     }
 }

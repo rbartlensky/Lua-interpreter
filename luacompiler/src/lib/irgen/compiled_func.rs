@@ -1,6 +1,6 @@
 use super::instr::{Arg, Instr};
 use super::register_map::RegisterMap;
-use bytecode::instructions::Opcode;
+use irgen::opcodes::IROpcode;
 
 pub struct BasicBlock {
     instrs: Vec<Instr>,
@@ -11,7 +11,7 @@ impl BasicBlock {
         BasicBlock { instrs: vec![] }
     }
 
-    pub fn push_instr(&mut self, opcode: Opcode, args: Vec<Arg>) {
+    pub fn push_instr(&mut self, opcode: IROpcode, args: Vec<Arg>) {
         self.instrs.push(Instr { opcode, args });
     }
 
@@ -23,7 +23,7 @@ impl BasicBlock {
         &mut self.instrs[i]
     }
 
-    pub fn get_instr_with_opcode(&mut self, op: Opcode) -> &mut Instr {
+    pub fn get_instr_with_opcode(&mut self, op: IROpcode) -> &mut Instr {
         let mut index = 0;
         for i in (0..self.instrs.len()).rev() {
             if self.instrs[i].opcode == op {

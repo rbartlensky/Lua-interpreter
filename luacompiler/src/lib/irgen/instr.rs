@@ -1,4 +1,4 @@
-use bytecode::instructions::Opcode;
+use irgen::opcodes::IROpcode;
 
 #[derive(PartialEq, Debug)]
 pub enum Arg {
@@ -47,12 +47,12 @@ impl Arg {
 
 #[derive(PartialEq, Debug)]
 pub struct Instr {
-    pub opcode: Opcode,
+    pub opcode: IROpcode,
     pub args: Vec<Arg>,
 }
 
 impl Instr {
-    pub fn new(opcode: Opcode, args: Vec<Arg>) -> Instr {
+    pub fn new(opcode: IROpcode, args: Vec<Arg>) -> Instr {
         Instr { opcode, args }
     }
 }
