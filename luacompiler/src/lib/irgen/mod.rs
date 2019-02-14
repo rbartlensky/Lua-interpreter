@@ -14,6 +14,7 @@ use cfgrammar::RIdx;
 use lrpar::Node::{self, *};
 use lua5_3_l;
 use lua5_3_y;
+use std::collections::{BTreeSet, HashMap};
 use LuaParseTree;
 
 /// Compile the given parse tree into an SSA IR.
@@ -57,7 +58,8 @@ impl<'a> LuaToIR<'a> {
 
     /// Compile and return the intermediate representation of the given lua parse tree.
     pub fn to_lua_ir(mut self) -> LuaIR<'a> {
-        self.compile_block(&self.pt.tree);
+        let new_block = self.curr_func().create_block();
+        self.compile_block_in_basic_block(&self.pt.tree, new_block);
         LuaIR::new(self.functions, 0)
     }
 
@@ -106,9 +108,9 @@ impl<'a> LuaToIR<'a> {
     fn compile_block(&mut self, node: &'a Node<u8>) -> usize {
         let parent = self.curr_block;
         let curr_block = self.curr_func().create_block_with_parents(vec![parent]);
-        self.compile_block_in_basic_block(node, curr_block);
         self.curr_block = curr_block;
         self.curr_block().push_dominator(parent);
+        self.compile_block_in_basic_block(node, curr_block);
         curr_block
     }
 
@@ -787,8 +789,8 @@ impl<'a> LuaToIR<'a> {
             self.compile_block_in_basic_block(&else_nodes[1], else_block);
             branches.push(else_block);
             self.curr_block = self.curr_func().create_block();
+            self.curr_block().push_dominator(before_if_index);
         }
-        self.curr_block().push_dominator(before_if_index);
         for &branch in &branches {
             let curr = self.curr_block;
             self.get_block(branch)
@@ -798,28 +800,39 @@ impl<'a> LuaToIR<'a> {
         if !process_else {
             branches.push(self.curr_block().parents()[0]);
         }
-        let mut parent_blocks: Vec<Arg> = self
-            .curr_block()
-            .parents()
-            .iter()
-            .map(|&p| Arg::Some(p))
-            .collect();
-        if !parent_blocks.contains(&Arg::Some(before_if_index)) {
-            parent_blocks.push(Arg::Some(before_if_index));
+        let mut phis: HashMap<&'a str, BTreeSet<usize>> = HashMap::new();
+        {
+            let curr_func = &self.functions[self.curr_func];
+            let curr_block = curr_func.get_block(self.curr_block);
+            for &p in curr_block
+                .parents()
+                .iter()
+                .chain(vec![before_if_index].iter())
+            {
+                for (name, &reg) in curr_func.get_block(p).non_locals() {
+                    phis.entry(name)
+                        .and_modify(|args| {
+                            args.insert(reg);
+                        })
+                        .or_insert_with(|| {
+                            let mut new_set = BTreeSet::new();
+                            new_set.insert(reg);
+                            new_set
+                        });
+                }
+            }
         }
-        self.push_instr(IROpcode::Phi, parent_blocks);
-        //let direct_parents = self.curr_block().parents().clone();
-        // println!("Getting vars for {}", before_if_index);
-        // for (name, reg) in self.curr_reg_map().get_variables(before_if_index) {
-        //     println!("Hello");
-        //     let mut phi_args = vec![Arg::Reg(reg)];
-        //     for &p in &direct_parents {
-        //         if let Some(&reg) = self.curr_reg_map().get_non_decl_variables(p).get(name) {
-        //             phi_args.push(Arg::Reg(reg));
-        //         }
-        //     }
-        //     self.push_instr(IROpcode::Phi, phi_args);
-        // }
+        for (name, mut args) in phis {
+            args.insert(
+                self.get_reg_from_block(name, before_if_index)
+                    .expect("Non-local found in branch, but not in parent blocks!"),
+            );
+            let mut args: Vec<Arg> = args.iter().map(|v| Arg::Reg(*v)).collect();
+            let new_reg = self.curr_func().get_new_reg();
+            args.insert(0, Arg::Reg(new_reg));
+            self.curr_block().set_reg_name(new_reg, name, false);
+            self.push_instr(IROpcode::Phi, args);
+        }
     }
 
     /// Compile an <elselist> or <elselistopt>.
@@ -875,6 +888,7 @@ mod tests {
         num_of_funcs: usize,
         expected_instrs: &Vec<Vec<Instr>>,
         expected_parents: &Vec<Vec<usize>>,
+        expected_dominators: &Vec<Vec<usize>>,
     ) {
         assert!(ir.functions.len() == num_of_funcs);
         for i in 0..ir.functions.len() {
@@ -887,10 +901,8 @@ mod tests {
             );
             for i in 0..blocks.len() {
                 let block = &blocks[i];
-                println!("{:#?} ; {:#?}", block.parents(), &expected_parents[i]);
                 check_eq(block.parents(), &expected_parents[i]);
-                println!("{:#?}\n{:#?}", block.instrs(), &expected_instrs[i]);
-                println!("------------");
+                check_eq(block.dominators(), &expected_dominators[i]);
                 check_eq(block.instrs(), &expected_instrs[i]);
             }
         }
@@ -1326,10 +1338,17 @@ mod tests {
                 Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(2)]),
                 Instr::new(IROpcode::Branch, vec![Some(3)]),
             ],
-            vec![Instr::new(IROpcode::Phi, vec![Some(1), Some(2), Some(0)])],
+            vec![],
         ];
-        let expected_parents = vec![vec![0], vec![0], vec![0], vec![1, 2]];
-        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+        let expected_parents = vec![vec![], vec![0], vec![0], vec![1, 2]];
+        let expected_dominators = vec![vec![], vec![0], vec![0], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
     }
 
     #[test]
@@ -1351,10 +1370,17 @@ mod tests {
                 Instr::new(IROpcode::from(MOV), vec![Reg(1), Int(2)]),
                 Instr::new(IROpcode::Branch, vec![Some(2)]),
             ],
-            vec![Instr::new(IROpcode::Phi, vec![Some(0), Some(1)])],
+            vec![],
         ];
-        let expected_parents = vec![vec![0], vec![0], vec![0, 1]];
-        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+        let expected_parents = vec![vec![], vec![0], vec![0, 1]];
+        let expected_dominators = vec![vec![], vec![0], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
     }
 
     #[test]
@@ -1362,13 +1388,13 @@ mod tests {
         let pt = &LuaParseTree::from_str(String::from(
             "local a, b, c
              if a then
-               local b = 2
+               b = 2
              elseif b then
-               local b = 3
+               b = 3
              elseif c then
-               local b = 4
+               b = 4
              else
-               local b = 5
+               b = 5
              end",
         ))
         .unwrap();
@@ -1400,11 +1426,11 @@ mod tests {
             ],
             vec![Instr::new(
                 IROpcode::Phi,
-                vec![Some(1), Some(3), Some(5), Some(6), Some(0)],
+                vec![Reg(7), Reg(1), Reg(3), Reg(4), Reg(5), Reg(6)],
             )],
         ];
         let expected_parents = vec![
-            vec![0],
+            vec![],
             vec![0],
             vec![0],
             vec![2],
@@ -1413,7 +1439,23 @@ mod tests {
             vec![4],
             vec![1, 3, 5, 6],
         ];
-        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+        let expected_dominators = vec![
+            vec![],
+            vec![0],
+            vec![0],
+            vec![2],
+            vec![2],
+            vec![4],
+            vec![4],
+            vec![0],
+        ];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
     }
 
     #[test]
@@ -1421,9 +1463,9 @@ mod tests {
         let pt = &LuaParseTree::from_str(String::from(
             "local a, b
              if a then
-               local b = 2
+               b = 2
              elseif b then
-               local b = 3
+               b = 3
              end",
         ))
         .unwrap();
@@ -1445,11 +1487,18 @@ mod tests {
             ],
             vec![Instr::new(
                 IROpcode::Phi,
-                vec![Some(2), Some(1), Some(3), Some(0)],
+                vec![Reg(4), Reg(1), Reg(2), Reg(3)],
             )],
         ];
-        let expected_parents = vec![vec![0], vec![0], vec![0], vec![2], vec![2, 1, 3]];
-        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+        let expected_parents = vec![vec![], vec![0], vec![0], vec![2], vec![2, 1, 3]];
+        let expected_dominators = vec![vec![], vec![0], vec![0], vec![2], vec![2]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
     }
 
     #[test]
@@ -1457,7 +1506,7 @@ mod tests {
         let pt = &LuaParseTree::from_str(String::from(
             "local a, b
              if a then
-               local b = 2
+               b = 2
                if b then
                  local c = 3
                end
@@ -1480,13 +1529,20 @@ mod tests {
                 Instr::new(IROpcode::Branch, vec![Some(3)]),
             ],
             vec![
-                Instr::new(IROpcode::Phi, vec![Some(1), Some(2)]),
+                Instr::new(IROpcode::Phi, vec![Reg(4), Reg(2)]),
                 Instr::new(IROpcode::Branch, vec![Some(4)]),
             ],
-            vec![Instr::new(IROpcode::Phi, vec![Some(0), Some(3)])],
+            vec![Instr::new(IROpcode::Phi, vec![Reg(5), Reg(1), Reg(4)])],
         ];
-        let expected_parents = vec![vec![0], vec![0], vec![1], vec![1, 2], vec![0, 3]];
-        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+        let expected_parents = vec![vec![], vec![0], vec![1], vec![1, 2], vec![0, 3]];
+        let expected_dominators = vec![vec![], vec![0], vec![1], vec![1], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
     }
 
     #[test]
@@ -1494,7 +1550,7 @@ mod tests {
         let pt = &LuaParseTree::from_str(String::from(
             "local a, b
              if a then
-               local b = 2
+               b = 2
                if b then
                  local c = 3
                else
@@ -1523,12 +1579,19 @@ mod tests {
                 Instr::new(IROpcode::Branch, vec![Some(4)]),
             ],
             vec![
-                Instr::new(IROpcode::Phi, vec![Some(2), Some(3), Some(1)]),
+                Instr::new(IROpcode::Phi, vec![Reg(5), Reg(2)]),
                 Instr::new(IROpcode::Branch, vec![Some(5)]),
             ],
-            vec![Instr::new(IROpcode::Phi, vec![Some(0), Some(4)])],
+            vec![Instr::new(IROpcode::Phi, vec![Reg(6), Reg(1), Reg(5)])],
         ];
-        let expected_parents = vec![vec![0], vec![0], vec![1], vec![1], vec![2, 3], vec![0, 4]];
-        check_instrs_and_parents(&ir, 1, &expected_instrs, &expected_parents);
+        let expected_parents = vec![vec![], vec![0], vec![1], vec![1], vec![2, 3], vec![0, 4]];
+        let expected_dominators = vec![vec![], vec![0], vec![1], vec![1], vec![1], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
     }
 }

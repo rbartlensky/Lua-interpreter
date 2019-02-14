@@ -89,6 +89,10 @@ impl<'a> BasicBlock<'a> {
         }
         self.non_locals.get(name).map(|v| *v)
     }
+
+    pub fn non_locals(&self) -> &HashMap<&'a str, usize> {
+        &self.non_locals
+    }
 }
 
 /// Represents a compiled function in Lua.
