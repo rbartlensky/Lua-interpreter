@@ -2,7 +2,6 @@ pub mod compiled_func;
 pub mod instr;
 pub mod lua_ir;
 pub mod opcodes;
-pub mod register_map;
 mod utils;
 
 use self::compiled_func::{BasicBlock, CompiledFunc};
@@ -12,7 +11,6 @@ use self::opcodes::IROpcode;
 use self::utils::{find_term, get_nodes, is_term};
 use bytecode::instructions::Opcode::*;
 use cfgrammar::RIdx;
-use irgen::register_map::RegisterMap;
 use lrpar::Node::{self, *};
 use lua5_3_l;
 use lua5_3_y;
@@ -67,40 +65,51 @@ impl<'a> LuaToIR<'a> {
         &mut self.functions[self.curr_func]
     }
 
-    fn curr_reg_map(&mut self) -> &mut RegisterMap<'a> {
-        self.functions[self.curr_func].reg_map()
-    }
-
-    fn curr_block(&mut self) -> &mut BasicBlock {
+    fn curr_block(&mut self) -> &mut BasicBlock<'a> {
         let i = self.curr_block;
-        self.functions[self.curr_func].get_block(i)
+        self.functions[self.curr_func].get_mut_block(i)
     }
 
-    fn get_block(&mut self, i: usize) -> &mut BasicBlock {
-        self.functions[self.curr_func].get_block(i)
+    fn get_block(&mut self, i: usize) -> &mut BasicBlock<'a> {
+        self.functions[self.curr_func].get_mut_block(i)
     }
 
     fn push_instr(&mut self, op: IROpcode, args: Vec<Arg>) {
         self.curr_block().push_instr(op, args);
     }
 
-    /// Compile a <block>.
-    fn compile_block(&mut self, node: &'a Node<u8>) -> usize {
-        self.curr_reg_map().push_block();
-        let block_num = self.compile_block_without_scope(node);
-        self.curr_reg_map().pop_block(block_num);
-        block_num
+    fn get_reg(&self, name: &'a str) -> Option<usize> {
+        self.get_reg_from_block(name, self.curr_block)
     }
 
-    /// Compiles a block in the current scope. This means that the user must
-    /// manully push/pop a new scope, if necessary.
-    fn compile_block_without_scope(&mut self, node: &'a Node<u8>) -> usize {
-        let parent_block = self.curr_block;
-        let index = self
-            .curr_func()
-            .create_block_with_parents(vec![parent_block]);
-        self.compile_block_in_basic_block(node, index);
-        index
+    fn get_reg_from_block(&self, name: &'a str, bb: usize) -> Option<usize> {
+        let curr_func = &self.functions[self.curr_func];
+        let curr_block = curr_func.get_block(bb);
+        let res = curr_block.get_reg(name);
+        if res.is_some() {
+            return res;
+        }
+        for &d in curr_block.dominators() {
+            let res = self.get_reg_from_block(name, d);
+            if res.is_some() {
+                return res;
+            }
+        }
+        None
+    }
+
+    fn is_local(&self, name: &'a str) -> bool {
+        self.get_reg(name).is_some()
+    }
+
+    /// Compile a <block>.
+    fn compile_block(&mut self, node: &'a Node<u8>) -> usize {
+        let parent = self.curr_block;
+        let curr_block = self.curr_func().create_block_with_parents(vec![parent]);
+        self.compile_block_in_basic_block(node, curr_block);
+        self.curr_block = curr_block;
+        self.curr_block().push_dominator(parent);
+        curr_block
     }
 
     fn compile_block_in_basic_block(&mut self, node: &'a Node<u8>, i: usize) {
@@ -160,7 +169,7 @@ impl<'a> LuaToIR<'a> {
             // compile_expr will generate (VarArg/MOVR <new_reg> <op2> <op3>)
             // but because we are modifying the last instruction, there is
             // no need to keep the previously allocated register
-            self.curr_reg_map().pop_last_reg();
+            self.curr_func().pop_last_reg();
         } else {
             if increment_ret_vals {
                 self.push_instr(
@@ -282,9 +291,9 @@ impl<'a> LuaToIR<'a> {
         if names.len() > exprs.len() {
             let mut regs = vec![];
             for i in exprs.len()..names.len() {
-                self.curr_reg_map().create_reg(names[i]);
-                let reg = self.curr_reg_map().reg_count() - 1;
-                regs.push(reg);
+                let new_reg = self.curr_func().get_new_reg();
+                self.curr_block().set_reg_name(new_reg, names[i], true);
+                regs.push(new_reg);
             }
             // check if the last expression is a vararg, so that we can emit the correct
             // instruction
@@ -338,11 +347,11 @@ impl<'a> LuaToIR<'a> {
         if names.len() > exprs.len() {
             let mut regs = vec![];
             for i in exprs.len()..names.len() {
-                let reg = self.curr_reg_map().get_new_reg();
-                if !self.curr_reg_map().is_local(names[i]) {
+                let reg = self.curr_func().get_new_reg();
+                if !self.is_local(names[i]) {
                     postponed_envs.push((names[i], reg));
                 } else {
-                    self.curr_reg_map().set_reg(names[i], reg);
+                    self.curr_block().set_reg_name(reg, names[i], false);
                 }
                 regs.push(reg);
             }
@@ -414,13 +423,13 @@ impl<'a> LuaToIR<'a> {
         // if it is, then it is a local assignment (because `reg_map` only stores
         // mappings of local variable to registers), if it isn't then we load it from
         // the global mapping
-        if action == AssignmentType::LocalDecl || self.curr_reg_map().get_reg(name).is_some() {
+        if action == AssignmentType::LocalDecl || self.get_reg(name).is_some() {
             // No new instructions were added, which means that <right> has already been
             // computed and stored in some register. Because we are compiling an
             // assignment, we will create a copy of this result and store it in <left>.
             // See test `load_string_multiple_times`.
             if self.curr_block().instrs().len() == old_len {
-                let new_reg = self.curr_reg_map().get_new_reg();
+                let new_reg = self.curr_func().get_new_reg();
                 self.push_instr(
                     IROpcode::from(MOV),
                     vec![Arg::Reg(new_reg), Arg::Reg(value)],
@@ -429,7 +438,8 @@ impl<'a> LuaToIR<'a> {
             }
             // if a variable is assigned a value multiple times, we have to make sure
             // that the map knows the new register which holds the new value
-            self.curr_reg_map().set_reg(name, value);
+            self.curr_block()
+                .set_reg_name(value, name, action == AssignmentType::LocalDecl);
             VariableType::Local(value)
         } else {
             if action != AssignmentType::Postponed {
@@ -473,15 +483,14 @@ impl<'a> LuaToIR<'a> {
                 let new_func = CompiledFunc::new(0, is_vararg);
                 self.functions.push(new_func);
                 self.curr_func = new_func_id;
-                self.curr_reg_map().push_block();
+                let new_basic_block = self.curr_func().create_block();
                 // make the first N registers point to the first N parameters
                 self.compile_param_list(&nodes[1]);
-                let block = self.compile_block_without_scope(&nodes[3]);
-                self.curr_reg_map().pop_block(block);
+                self.compile_block_in_basic_block(&nodes[3], new_basic_block);
                 // restore the old state so that we can create a closure instruction
                 // in the outer function
                 self.curr_func = old_curr_func;
-                let reg = self.curr_reg_map().get_new_reg();
+                let reg = self.curr_func().get_new_reg();
                 self.push_instr(
                     IROpcode::from(CLOSURE),
                     vec![Arg::Reg(reg), Arg::Func(new_func_id)],
@@ -493,7 +502,7 @@ impl<'a> LuaToIR<'a> {
                 ref nodes,
             } if ridx == lua5_3_y::R_FUNCTIONCALL => {
                 self.compile_call(&nodes[0], &nodes[1]);
-                let reg = self.curr_reg_map().get_new_reg();
+                let reg = self.curr_func().get_new_reg();
                 self.push_instr(IROpcode::from(MOVR), vec![Arg::Reg(reg), Arg::Some(0)]);
                 reg
             }
@@ -507,7 +516,7 @@ impl<'a> LuaToIR<'a> {
                     debug_assert!(nodes.len() == 3);
                     let left = self.compile_expr(&nodes[0]);
                     let right = self.compile_expr(&nodes[2]);
-                    let new_var = self.curr_reg_map().get_new_reg();
+                    let new_var = self.curr_func().get_new_reg();
                     let (opcode, args) = self.get_instr(&nodes[1], new_var, left, right);
                     self.push_instr(opcode, args);
                     new_var
@@ -519,7 +528,7 @@ impl<'a> LuaToIR<'a> {
                     .get_string(lexeme.start(), lexeme.end().unwrap_or(lexeme.start()));
                 match lexeme.tok_id() {
                     lua5_3_l::T_NUMERAL => {
-                        let new_reg = self.curr_reg_map().get_new_reg();
+                        let new_reg = self.curr_func().get_new_reg();
                         let arg = if value.contains(".") {
                             Arg::Float(value.parse().unwrap())
                         } else {
@@ -529,7 +538,7 @@ impl<'a> LuaToIR<'a> {
                         new_reg
                     }
                     lua5_3_l::T_SHORT_STR => {
-                        let new_reg = self.curr_reg_map().get_new_reg();
+                        let new_reg = self.curr_func().get_new_reg();
                         self.push_instr(
                             IROpcode::from(MOV),
                             vec![
@@ -539,10 +548,10 @@ impl<'a> LuaToIR<'a> {
                         );
                         new_reg
                     }
-                    lua5_3_l::T_NAME => match self.curr_reg_map().get_reg(value) {
+                    lua5_3_l::T_NAME => match self.get_reg(value) {
                         Some(reg) => reg,
                         None => {
-                            let reg = self.curr_reg_map().get_new_reg();
+                            let reg = self.curr_func().get_new_reg();
                             self.push_instr(
                                 IROpcode::from(GetUpAttr),
                                 vec![Arg::Reg(reg), Arg::Some(0), Arg::Str(value.to_string())],
@@ -552,7 +561,7 @@ impl<'a> LuaToIR<'a> {
                     },
                     lua5_3_l::T_DOTDOTDOT => {
                         if self.curr_func().is_vararg() {
-                            let reg = self.curr_reg_map().get_new_reg();
+                            let reg = self.curr_func().get_new_reg();
                             self.push_instr(
                                 IROpcode::from(VarArg),
                                 vec![Arg::Reg(reg), Arg::Some(0)],
@@ -653,9 +662,9 @@ impl<'a> LuaToIR<'a> {
                     }
                 }
                 self.functions[self.curr_func].set_param_count(names.len());
-                let mut reg_map = self.curr_reg_map();
                 for name in names {
-                    reg_map.create_reg(name);
+                    let reg = self.curr_func().get_new_reg();
+                    self.curr_block().set_reg_name(reg, name, true);
                 }
             }
             _ => panic!("Root node was not a <parlist>"),
@@ -748,10 +757,12 @@ impl<'a> LuaToIR<'a> {
             .iter()
             .chain(elselist.iter())
             .map(|(e, b)| {
+                let before = self.curr_block;
                 // compile if condition
                 let expr_res = self.compile_expr(e);
                 // compile true branch as a child of the current block
                 let true_block = self.compile_block(b);
+                self.curr_block = before;
                 let last_true_block = self.curr_func().blocks().len() - 1;
                 // create a new block
                 let parent = self.curr_block;
@@ -765,6 +776,7 @@ impl<'a> LuaToIR<'a> {
                     ],
                 );
                 self.curr_block = elif_block;
+                self.curr_block().push_dominator(before);
                 last_true_block
             })
             .collect();
@@ -774,10 +786,9 @@ impl<'a> LuaToIR<'a> {
             let else_block = self.curr_block;
             self.compile_block_in_basic_block(&else_nodes[1], else_block);
             branches.push(else_block);
-            self.curr_reg_map().pop_block(else_block);
             self.curr_block = self.curr_func().create_block();
-            self.curr_reg_map().push_block();
         }
+        self.curr_block().push_dominator(before_if_index);
         for &branch in &branches {
             let curr = self.curr_block;
             self.get_block(branch)
@@ -787,16 +798,28 @@ impl<'a> LuaToIR<'a> {
         if !process_else {
             branches.push(self.curr_block().parents()[0]);
         }
-        let mut phi_args: Vec<Arg> = self
+        let mut parent_blocks: Vec<Arg> = self
             .curr_block()
             .parents()
             .iter()
             .map(|&p| Arg::Some(p))
             .collect();
-        if !phi_args.contains(&Arg::Some(before_if_index)) {
-            phi_args.push(Arg::Some(before_if_index));
+        if !parent_blocks.contains(&Arg::Some(before_if_index)) {
+            parent_blocks.push(Arg::Some(before_if_index));
         }
-        self.push_instr(IROpcode::Phi, phi_args);
+        self.push_instr(IROpcode::Phi, parent_blocks);
+        //let direct_parents = self.curr_block().parents().clone();
+        // println!("Getting vars for {}", before_if_index);
+        // for (name, reg) in self.curr_reg_map().get_variables(before_if_index) {
+        //     println!("Hello");
+        //     let mut phi_args = vec![Arg::Reg(reg)];
+        //     for &p in &direct_parents {
+        //         if let Some(&reg) = self.curr_reg_map().get_non_decl_variables(p).get(name) {
+        //             phi_args.push(Arg::Reg(reg));
+        //         }
+        //     }
+        //     self.push_instr(IROpcode::Phi, phi_args);
+        // }
     }
 
     /// Compile an <elselist> or <elselistopt>.
@@ -864,9 +887,9 @@ mod tests {
             );
             for i in 0..blocks.len() {
                 let block = &blocks[i];
-                println!("{:?} ; {:?}", block.parents(), &expected_parents[i]);
+                println!("{:#?} ; {:#?}", block.parents(), &expected_parents[i]);
                 check_eq(block.parents(), &expected_parents[i]);
-                println!("{:?}\n{:?}", block.instrs(), &expected_instrs[i]);
+                println!("{:#?}\n{:#?}", block.instrs(), &expected_instrs[i]);
                 println!("------------");
                 check_eq(block.instrs(), &expected_instrs[i]);
             }

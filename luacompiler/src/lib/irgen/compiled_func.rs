@@ -1,24 +1,33 @@
 use super::instr::{Arg, Instr};
-use super::register_map::RegisterMap;
 use irgen::opcodes::IROpcode;
+use std::collections::HashMap;
 
-pub struct BasicBlock {
+pub struct BasicBlock<'a> {
     parents: Vec<usize>,
+    dominators: Vec<usize>,
     instrs: Vec<Instr>,
+    non_locals: HashMap<&'a str, usize>,
+    locals: HashMap<&'a str, usize>,
 }
 
-impl BasicBlock {
-    pub fn new() -> BasicBlock {
+impl<'a> BasicBlock<'a> {
+    pub fn new() -> BasicBlock<'a> {
         BasicBlock {
             parents: vec![],
+            dominators: vec![],
             instrs: vec![],
+            non_locals: HashMap::new(),
+            locals: HashMap::new(),
         }
     }
 
-    pub fn with_parents(parents: Vec<usize>) -> BasicBlock {
+    pub fn with_parents(parents: Vec<usize>) -> BasicBlock<'a> {
         BasicBlock {
             parents,
+            dominators: vec![],
             instrs: vec![],
+            non_locals: HashMap::new(),
+            locals: HashMap::new(),
         }
     }
 
@@ -56,13 +65,37 @@ impl BasicBlock {
     pub fn push_parent(&mut self, parent: usize) {
         self.parents.push(parent);
     }
+
+    pub fn dominators(&self) -> &Vec<usize> {
+        &self.dominators
+    }
+
+    pub fn push_dominator(&mut self, bb: usize) {
+        self.dominators.push(bb);
+    }
+
+    pub fn set_reg_name(&mut self, reg: usize, name: &'a str, is_local_decl: bool) {
+        if is_local_decl || self.locals.contains_key(name) {
+            self.locals.insert(name, reg);
+        } else {
+            self.non_locals.insert(name, reg);
+        }
+    }
+
+    pub fn get_reg(&self, name: &'a str) -> Option<usize> {
+        let res = self.locals.get(name);
+        if res.is_some() {
+            return res.map(|v| *v);
+        }
+        self.non_locals.get(name).map(|v| *v)
+    }
 }
 
 /// Represents a compiled function in Lua.
 pub struct CompiledFunc<'a> {
-    reg_map: RegisterMap<'a>,
+    reg_count: usize,
     param_count: usize,
-    basic_blocks: Vec<BasicBlock>,
+    basic_blocks: Vec<BasicBlock<'a>>,
     is_vararg: bool,
 }
 
@@ -70,14 +103,23 @@ impl<'a> CompiledFunc<'a> {
     /// Create a new empty function with the given index.
     pub fn new(param_count: usize, is_vararg: bool) -> CompiledFunc<'a> {
         CompiledFunc {
-            reg_map: RegisterMap::new(),
-            basic_blocks: vec![],
+            reg_count: 0,
             param_count,
+            basic_blocks: vec![],
             is_vararg,
         }
     }
 
-    pub fn blocks(&self) -> &Vec<BasicBlock> {
+    pub fn get_new_reg(&mut self) -> usize {
+        self.reg_count += 1;
+        self.reg_count - 1
+    }
+
+    pub fn pop_last_reg(&mut self) {
+        self.reg_count -= 1;
+    }
+
+    pub fn blocks(&self) -> &Vec<BasicBlock<'a>> {
         &self.basic_blocks
     }
 
@@ -91,16 +133,16 @@ impl<'a> CompiledFunc<'a> {
         self.basic_blocks.len() - 1
     }
 
-    pub fn get_block(&mut self, i: usize) -> &mut BasicBlock {
+    pub fn get_block(&self, i: usize) -> &BasicBlock<'a> {
+        &self.basic_blocks[i]
+    }
+
+    pub fn get_mut_block(&mut self, i: usize) -> &mut BasicBlock<'a> {
         &mut self.basic_blocks[i]
     }
 
     pub fn reg_count(&self) -> usize {
-        self.reg_map.reg_count()
-    }
-
-    pub fn reg_map(&mut self) -> &mut RegisterMap<'a> {
-        &mut self.reg_map
+        self.reg_count
     }
 
     pub fn is_vararg(&self) -> bool {

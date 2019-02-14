@@ -20,7 +20,7 @@ struct LuaIRToLuaBc<'a> {
 
 impl<'a> LuaIRToLuaBc<'a> {
     /// Compile the given LuaIR to LuaBytecode.
-    fn new(ir: LuaIR) -> LuaIRToLuaBc {
+    fn new(ir: LuaIR<'a>) -> LuaIRToLuaBc<'a> {
         LuaIRToLuaBc {
             ir,
             const_map: ConstantsMap::new(),
