@@ -1,6 +1,6 @@
 use irgen::opcodes::IROpcode;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum Arg {
     Nil,
     Int(i64),
@@ -54,5 +54,13 @@ pub struct Instr {
 impl Instr {
     pub fn new(opcode: IROpcode, args: Vec<Arg>) -> Instr {
         Instr { opcode, args }
+    }
+
+    pub fn replace_regs_with(&mut self, regs: &[Arg], with: &Arg) {
+        for i in 0..self.args.len() {
+            if regs.contains(&self.args[i]) {
+                self.args[i] = with.clone();
+            }
+        }
     }
 }

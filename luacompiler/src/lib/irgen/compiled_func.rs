@@ -39,6 +39,10 @@ impl<'a> BasicBlock<'a> {
         &self.instrs
     }
 
+    pub fn get(&self, i: usize) -> &Instr {
+        &self.instrs[i]
+    }
+
     pub fn get_mut(&mut self, i: usize) -> &mut Instr {
         &mut self.instrs[i]
     }
@@ -92,6 +96,12 @@ impl<'a> BasicBlock<'a> {
 
     pub fn non_locals(&self) -> &HashMap<&'a str, usize> {
         &self.non_locals
+    }
+
+    pub fn replace_regs_with(&mut self, regs: &[Arg], with: &Arg) {
+        for mut instr in &mut self.instrs {
+            instr.replace_regs_with(regs, with);
+        }
     }
 }
 
@@ -163,5 +173,9 @@ impl<'a> CompiledFunc<'a> {
 
     pub fn set_param_count(&mut self, count: usize) {
         self.param_count = count;
+    }
+
+    pub fn get_mut_blocks(&mut self) -> &mut Vec<BasicBlock<'a>> {
+        &mut self.basic_blocks
     }
 }
