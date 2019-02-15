@@ -14,7 +14,8 @@ mod stdlib;
 use errors::LuaError;
 use gc::Gc;
 use instructions::{
-    arithmetic_operators::*, functions::*, loads::*, relational_operators::*, tables::*, upvals::*,
+    arithmetic_operators::*, control::*, functions::*, loads::*, relational_operators::*,
+    tables::*, upvals::*,
 };
 use lua_values::{
     lua_closure::{LuaClosure, UserFunction},
@@ -53,6 +54,8 @@ const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
     set_top,
     get_up_attr,
     set_up_attr,
+    jmp,
+    jmp_if,
 ];
 
 /// Represents a `LuaBytecode` interpreter.
@@ -104,9 +107,9 @@ impl Vm {
     }
 
     fn init_stdlib(bc: &LuaBytecode, env: &mut Gc<LuaVal>) {
-        let mut strings = bc.strings().iter().enumerate();
+        let strings = bc.strings();
         for func in STDLIB_FUNCS {
-            if let Some(res) = strings.find(|s| s.1 == func.name()) {
+            if let Some(res) = strings.iter().enumerate().find(|s| s.1 == &func.name()) {
                 env.set_attr(
                     LuaVal::from((func.name().to_string(), res.0)),
                     LuaVal::from(func),
