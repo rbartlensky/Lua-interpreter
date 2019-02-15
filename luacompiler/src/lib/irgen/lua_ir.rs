@@ -20,13 +20,15 @@ impl<'a> LuaIR<'a> {
             let len = self.functions[f].blocks().len();
             for bb in 0..len {
                 for i in 0..self.functions[f].get_block(bb).instrs().len() {
-                    let instr = self.functions[f].get_block(bb).get(i);
+                    let instr = self.functions[f].get_mut_block(bb).get_mut(i);
                     if let Instr {
                         opcode: IROpcode::Phi,
-                        ref args,
+                        ref mut args,
                     } = instr
                     {
-                        points.push((bb, args.clone()));
+                        let mut new_args = vec![];
+                        std::mem::swap(args, &mut new_args);
+                        points.push((bb, new_args));
                     }
                 }
             }
@@ -75,14 +77,8 @@ mod tests {
                     vec![Arg::Reg(3), Arg::Reg(4), Arg::Reg(3)],
                 ),
             ],
-            vec![Instr::new(
-                IROpcode::Phi,
-                vec![Arg::Reg(4), Arg::Reg(1), Arg::Reg(2)],
-            )],
-            vec![Instr::new(
-                IROpcode::Phi,
-                vec![Arg::Reg(6), Arg::Reg(5)],
-            )],
+            vec![Instr::new(IROpcode::Phi, vec![])],
+            vec![Instr::new(IROpcode::Phi, vec![])],
         ];
         for (i, bb) in ir.functions[0].blocks().iter().enumerate() {
             assert_eq!(bb.instrs(), &expected[i]);

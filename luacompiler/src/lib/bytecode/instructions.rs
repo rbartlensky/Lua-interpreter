@@ -1,26 +1,41 @@
 const MASK: u32 = 0x000000FF;
 
 /// Get the opcode of an instruction
-pub fn opcode(instr: u32) -> u8 {
+#[inline]
+pub const fn opcode(instr: u32) -> u8 {
     (instr & MASK) as u8
 }
 
 /// Get the first argument of an instruction.
-pub fn first_arg(instr: u32) -> u8 {
+#[inline]
+pub const fn first_arg(instr: u32) -> u8 {
     ((instr >> 8) & MASK) as u8
 }
 
+#[inline]
+pub fn set_first_arg(instr: &mut u32, v: u8) {
+    *instr |= (v as u32) << 8;
+}
+
 /// Get the second argument of an instruction.
-pub fn second_arg(instr: u32) -> u8 {
+#[inline]
+pub const fn second_arg(instr: u32) -> u8 {
     ((instr >> 16) & MASK) as u8
 }
 
+#[inline]
+pub fn set_second_arg(instr: &mut u32, v: u8) {
+    *instr |= (v as u32) << 16;
+}
+
 /// Get the third argument of an instruction.
-pub fn third_arg(instr: u32) -> u8 {
+#[inline]
+pub const fn third_arg(instr: u32) -> u8 {
     ((instr >> 24) & MASK) as u8
 }
 
 /// Create an instruction with the given opcode and arguments.
+#[inline]
 pub const fn make_instr(opcode: Opcode, arg1: u8, arg2: u8, arg3: u8) -> u32 {
     opcode as u32 + ((arg1 as u32) << 8) + ((arg2 as u32) << 16) + ((arg3 as u32) << 24)
 }
@@ -50,6 +65,8 @@ pub fn format_instr(instr: u32) -> String {
         20 => "SetTop",
         21 => "GetUpAttr",
         22 => "SetUpAttr",
+        23 => "Jmp",
+        24 => "JmpIf",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(
@@ -59,21 +76,6 @@ pub fn format_instr(instr: u32) -> String {
         second_arg(instr),
         third_arg(instr)
     )
-}
-
-/// Represents a high level instruction whose operands have a size of usize.
-/// This is used by the frontend to create an SSA IR, which later gets translated
-/// into smaller instructions that fit in 32 bits.
-#[derive(PartialEq, Eq, Debug, Clone, Copy)]
-pub struct HLInstr(pub Opcode, pub usize, pub usize, pub usize);
-
-impl HLInstr {
-    pub fn as_32bit(&self) -> u32 {
-        if self.1 > 255 || self.2 > 255 || self.3 > 255 {
-            panic!("Value is truncated!");
-        }
-        make_instr(self.0, self.1 as u8, self.2 as u8, self.3 as u8)
-    }
 }
 
 /// Represents the supported operations of the bytecode.
@@ -113,6 +115,8 @@ pub enum Opcode {
     SetTop = 20,    // set R(1)'s `args_start` to the top of the stack
     GetUpAttr = 21, // R(1) = Upvals[Arg(2)][Arg(3)]
     SetUpAttr = 22, // Upvals[Arg(1)][Arg(2)] = R(3)
+    Jmp = 23,
+    JmpIf = 24,
 }
 
 #[cfg(test)]
