@@ -21,11 +21,7 @@ impl<'a> LuaIR<'a> {
             for bb in 0..len {
                 for i in 0..self.functions[f].get_block(bb).instrs().len() {
                     let instr = self.functions[f].get_mut_block(bb).get_mut(i);
-                    if let Instr {
-                        opcode: IROpcode::Phi,
-                        ref mut args,
-                    } = instr
-                    {
+                    if let Instr::NArg(IROpcode::Phi, ref mut args) = instr {
                         let mut new_args = vec![];
                         std::mem::swap(args, &mut new_args);
                         points.push((bb, new_args));
@@ -52,33 +48,44 @@ mod tests {
         func.create_block();
         func.create_block();
         func.create_block();
-        func.get_mut_block(0).push_instr(
+        func.get_mut_block(0).mut_instrs().push(Instr::ThreeArg(
             IROpcode::from(Opcode::MOV),
-            vec![Arg::Reg(1), Arg::Reg(2), Arg::Reg(5)],
-        );
-        func.get_mut_block(0).push_instr(
+            Arg::Reg(1),
+            Arg::Reg(2),
+            Arg::Reg(5),
+        ));
+        func.get_mut_block(0).mut_instrs().push(Instr::ThreeArg(
             IROpcode::from(Opcode::MOV),
-            vec![Arg::Reg(3), Arg::Reg(2), Arg::Reg(3)],
-        );
-        func.get_mut_block(1)
-            .push_instr(IROpcode::Phi, vec![Arg::Reg(4), Arg::Reg(1), Arg::Reg(2)]);
+            Arg::Reg(3),
+            Arg::Reg(2),
+            Arg::Reg(3),
+        ));
+        func.get_mut_block(1).mut_instrs().push(Instr::NArg(
+            IROpcode::Phi,
+            vec![Arg::Reg(4), Arg::Reg(1), Arg::Reg(2)],
+        ));
         func.get_mut_block(2)
-            .push_instr(IROpcode::Phi, vec![Arg::Reg(6), Arg::Reg(5)]);
+            .mut_instrs()
+            .push(Instr::NArg(IROpcode::Phi, vec![Arg::Reg(6), Arg::Reg(5)]));
         let mut ir = LuaIR::new(vec![func], 0);
         ir.substitute_phis();
         let expected = vec![
             vec![
-                Instr::new(
+                Instr::ThreeArg(
                     IROpcode::from(Opcode::MOV),
-                    vec![Arg::Reg(4), Arg::Reg(4), Arg::Reg(6)],
+                    Arg::Reg(4),
+                    Arg::Reg(4),
+                    Arg::Reg(6),
                 ),
-                Instr::new(
+                Instr::ThreeArg(
                     IROpcode::from(Opcode::MOV),
-                    vec![Arg::Reg(3), Arg::Reg(4), Arg::Reg(3)],
+                    Arg::Reg(3),
+                    Arg::Reg(4),
+                    Arg::Reg(3),
                 ),
             ],
-            vec![Instr::new(IROpcode::Phi, vec![])],
-            vec![Instr::new(IROpcode::Phi, vec![])],
+            vec![Instr::NArg(IROpcode::Phi, vec![])],
+            vec![Instr::NArg(IROpcode::Phi, vec![])],
         ];
         for (i, bb) in ir.functions[0].blocks().iter().enumerate() {
             assert_eq!(bb.instrs(), &expected[i]);

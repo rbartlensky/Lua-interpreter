@@ -5,7 +5,7 @@ pub mod opcodes;
 mod utils;
 
 use self::compiled_func::{BasicBlock, CompiledFunc};
-use self::instr::Arg;
+use self::instr::{Arg, Instr};
 use self::lua_ir::LuaIR;
 use self::opcodes::IROpcode;
 use self::utils::{find_term, get_nodes, is_term};
@@ -76,8 +76,8 @@ impl<'a> LuaToIR<'a> {
         self.functions[self.curr_func].get_mut_block(i)
     }
 
-    fn push_instr(&mut self, op: IROpcode, args: Vec<Arg>) {
-        self.curr_block().push_instr(op, args);
+    fn instrs(&mut self) -> &mut Vec<Instr> {
+        self.curr_block().mut_instrs()
     }
 
     fn get_reg(&self, name: &'a str) -> Option<usize> {
@@ -136,13 +136,15 @@ impl<'a> LuaToIR<'a> {
                     // push the first n-1 return values to the stack
                     for i in 0..(exprs.len() - 1) {
                         let reg = self.compile_expr(exprs[i]);
-                        self.push_instr(
+                        self.instrs().push(Instr::ThreeArg(
                             IROpcode::from(PUSH),
-                            vec![Arg::Reg(reg), Arg::Some(0), Arg::Some(1)],
-                        );
+                            Arg::Reg(reg),
+                            Arg::Some(0),
+                            Arg::Some(1),
+                        ));
                     }
                     self.unpack_to_stack(&exprs.last().unwrap(), true);
-                    self.push_instr(IROpcode::from(RET), vec![]);
+                    self.instrs().push(Instr::ZeroArg(IROpcode::from(RET)));
                 }
             }
             _ => panic!("Expected a <retstatopt>, but got {:#?}", node),
@@ -157,16 +159,15 @@ impl<'a> LuaToIR<'a> {
                 // this is either a VarArg instr, or a MOVR
                 let last_instr = self.curr_block().get_mut(len - 1);
                 debug_assert!(
-                    last_instr.opcode == IROpcode::from(MOVR)
-                        || last_instr.opcode == IROpcode::from(VarArg)
+                    last_instr.opcode() == IROpcode::from(MOVR)
+                        || last_instr.opcode() == IROpcode::from(VarArg)
                 );
                 // check bytecode/instructions.rs for more info on why we set the third
                 // argument to 1 or 2
-                last_instr.args = vec![
-                    Arg::Some(0),
-                    Arg::Some(0),
+                *last_instr = Instr::OneArg(
+                    last_instr.opcode(),
                     Arg::Some(1 + increment_ret_vals as usize),
-                ];
+                );
             }
             // compile_expr will generate (VarArg/MOVR <new_reg> <op2> <op3>)
             // but because we are modifying the last instruction, there is
@@ -174,12 +175,15 @@ impl<'a> LuaToIR<'a> {
             self.curr_func().pop_last_reg();
         } else {
             if increment_ret_vals {
-                self.push_instr(
+                self.instrs().push(Instr::ThreeArg(
                     IROpcode::from(PUSH),
-                    vec![Arg::Reg(reg), Arg::Some(0), Arg::Some(1)],
-                );
+                    Arg::Reg(reg),
+                    Arg::Some(0),
+                    Arg::Some(1),
+                ));
             } else {
-                self.push_instr(IROpcode::from(PUSH), vec![Arg::Reg(reg)]);
+                self.instrs()
+                    .push(Instr::OneArg(IROpcode::from(PUSH), Arg::Reg(reg)));
             }
         }
     }
@@ -311,7 +315,8 @@ impl<'a> LuaToIR<'a> {
             }
             if assign_nils {
                 for reg in regs {
-                    self.push_instr(IROpcode::from(MOV), vec![Arg::Reg(reg), Arg::Nil]);
+                    self.instrs()
+                        .push(Instr::TwoArg(IROpcode::from(MOV), Arg::Reg(reg), Arg::Nil));
                 }
             }
         } else if names.len() < exprs.len() {
@@ -369,7 +374,8 @@ impl<'a> LuaToIR<'a> {
             }
             if assign_nils {
                 for reg in regs {
-                    self.push_instr(IROpcode::from(MOV), vec![Arg::Reg(reg), Arg::Nil]);
+                    self.instrs()
+                        .push(Instr::TwoArg(IROpcode::from(MOV), Arg::Reg(reg), Arg::Nil));
                 }
             }
         } else if names.len() < exprs.len() {
@@ -381,10 +387,12 @@ impl<'a> LuaToIR<'a> {
         }
         // generate the missing instructions that were postponed
         for (name, reg) in postponed_envs {
-            self.push_instr(
+            self.instrs().push(Instr::ThreeArg(
                 IROpcode::from(SetUpAttr),
-                vec![Arg::Some(0), Arg::Str(name.to_string()), Arg::Reg(reg)],
-            );
+                Arg::Some(0),
+                Arg::Str(name.to_string()),
+                Arg::Reg(reg),
+            ));
         }
     }
 
@@ -403,7 +411,8 @@ impl<'a> LuaToIR<'a> {
             IROpcode::from(MOVR)
         };
         for (i, reg) in regs.iter().enumerate() {
-            self.push_instr(opcode, vec![Arg::Reg(*reg), Arg::Some(i + 1)]);
+            self.instrs()
+                .push(Instr::TwoArg(opcode, Arg::Reg(*reg), Arg::Some(i + 1)));
         }
     }
 
@@ -432,10 +441,11 @@ impl<'a> LuaToIR<'a> {
             // See test `load_string_multiple_times`.
             if self.curr_block().instrs().len() == old_len {
                 let new_reg = self.curr_func().get_new_reg();
-                self.push_instr(
+                self.instrs().push(Instr::TwoArg(
                     IROpcode::from(MOV),
-                    vec![Arg::Reg(new_reg), Arg::Reg(value)],
-                );
+                    Arg::Reg(new_reg),
+                    Arg::Reg(value),
+                ));
                 value = new_reg;
             }
             // if a variable is assigned a value multiple times, we have to make sure
@@ -445,10 +455,12 @@ impl<'a> LuaToIR<'a> {
             VariableType::Local(value)
         } else {
             if action != AssignmentType::Postponed {
-                self.push_instr(
+                self.instrs().push(Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Arg::Some(0), Arg::Str(name.to_string()), Arg::Reg(value)],
-                );
+                    Arg::Some(0),
+                    Arg::Str(name.to_string()),
+                    Arg::Reg(value),
+                ));
             }
             VariableType::Global(value)
         }
@@ -493,10 +505,11 @@ impl<'a> LuaToIR<'a> {
                 // in the outer function
                 self.curr_func = old_curr_func;
                 let reg = self.curr_func().get_new_reg();
-                self.push_instr(
+                self.instrs().push(Instr::TwoArg(
                     IROpcode::from(CLOSURE),
-                    vec![Arg::Reg(reg), Arg::Func(new_func_id)],
-                );
+                    Arg::Reg(reg),
+                    Arg::Func(new_func_id),
+                ));
                 reg
             }
             Nonterm {
@@ -505,7 +518,11 @@ impl<'a> LuaToIR<'a> {
             } if ridx == lua5_3_y::R_FUNCTIONCALL => {
                 self.compile_call(&nodes[0], &nodes[1]);
                 let reg = self.curr_func().get_new_reg();
-                self.push_instr(IROpcode::from(MOVR), vec![Arg::Reg(reg), Arg::Some(0)]);
+                self.instrs().push(Instr::TwoArg(
+                    IROpcode::from(MOVR),
+                    Arg::Reg(reg),
+                    Arg::Some(0),
+                ));
                 reg
             }
             Nonterm {
@@ -519,8 +536,8 @@ impl<'a> LuaToIR<'a> {
                     let left = self.compile_expr(&nodes[0]);
                     let right = self.compile_expr(&nodes[2]);
                     let new_var = self.curr_func().get_new_reg();
-                    let (opcode, args) = self.get_instr(&nodes[1], new_var, left, right);
-                    self.push_instr(opcode, args);
+                    let instr = self.get_instr(&nodes[1], new_var, left, right);
+                    self.instrs().push(instr);
                     new_var
                 }
             }
@@ -536,38 +553,43 @@ impl<'a> LuaToIR<'a> {
                         } else {
                             Arg::Int(value.parse().unwrap())
                         };
-                        self.push_instr(IROpcode::from(MOV), vec![Arg::Reg(new_reg), arg]);
+                        self.instrs().push(Instr::TwoArg(
+                            IROpcode::from(MOV),
+                            Arg::Reg(new_reg),
+                            arg,
+                        ));
                         new_reg
                     }
                     lua5_3_l::T_SHORT_STR => {
                         let new_reg = self.curr_func().get_new_reg();
-                        self.push_instr(
+                        self.instrs().push(Instr::TwoArg(
                             IROpcode::from(MOV),
-                            vec![
-                                Arg::Reg(new_reg),
-                                Arg::Str(value[1..(value.len() - 1)].to_string()),
-                            ],
-                        );
+                            Arg::Reg(new_reg),
+                            Arg::Str(value[1..(value.len() - 1)].to_string()),
+                        ));
                         new_reg
                     }
                     lua5_3_l::T_NAME => match self.get_reg(value) {
                         Some(reg) => reg,
                         None => {
                             let reg = self.curr_func().get_new_reg();
-                            self.push_instr(
+                            self.instrs().push(Instr::ThreeArg(
                                 IROpcode::from(GetUpAttr),
-                                vec![Arg::Reg(reg), Arg::Some(0), Arg::Str(value.to_string())],
-                            );
+                                Arg::Reg(reg),
+                                Arg::Some(0),
+                                Arg::Str(value.to_string()),
+                            ));
                             reg
                         }
                     },
                     lua5_3_l::T_DOTDOTDOT => {
                         if self.curr_func().is_vararg() {
                             let reg = self.curr_func().get_new_reg();
-                            self.push_instr(
+                            self.instrs().push(Instr::TwoArg(
                                 IROpcode::from(VarArg),
-                                vec![Arg::Reg(reg), Arg::Some(0)],
-                            );
+                                Arg::Reg(reg),
+                                Arg::Some(0),
+                            ));
                             reg
                         } else {
                             panic!("Cannot use '...' outside of a vararg function.")
@@ -683,17 +705,20 @@ impl<'a> LuaToIR<'a> {
             } if ridx == lua5_3_y::R_ARGS => &nodes[1],
             _ => panic!("Missing node <args> from <functioncall>"),
         };
-        self.push_instr(IROpcode::from(SetTop), vec![Arg::Reg(func_reg)]);
+        self.instrs()
+            .push(Instr::OneArg(IROpcode::from(SetTop), Arg::Reg(func_reg)));
         let exprs = self.get_underlying_exprs(params);
         if exprs.len() > 0 {
             // push the arguments to the function
             for i in 0..(exprs.len() - 1) {
                 let reg = self.compile_expr(exprs[i]);
-                self.push_instr(IROpcode::from(PUSH), vec![Arg::Reg(reg)]);
+                self.instrs()
+                    .push(Instr::OneArg(IROpcode::from(PUSH), Arg::Reg(reg)));
             }
             self.unpack_to_stack(&exprs.last().unwrap(), false);
         }
-        self.push_instr(IROpcode::from(CALL), vec![Arg::Reg(func_reg)])
+        self.instrs()
+            .push(Instr::OneArg(IROpcode::from(CALL), Arg::Reg(func_reg)));
     }
 
     /// Checks if exp is '...'
@@ -720,13 +745,7 @@ impl<'a> LuaToIR<'a> {
     }
 
     /// Get the appropriate instruction for a given Node::Term.
-    fn get_instr(
-        &self,
-        node: &'a Node<u8>,
-        reg: usize,
-        lreg: usize,
-        rreg: usize,
-    ) -> (IROpcode, Vec<Arg>) {
+    fn get_instr(&self, node: &'a Node<u8>, reg: usize, lreg: usize, rreg: usize) -> Instr {
         if let Term { lexeme } = node {
             let opcode = match lexeme.tok_id() {
                 lua5_3_l::T_PLUS => IROpcode::from(ADD),
@@ -739,7 +758,7 @@ impl<'a> LuaToIR<'a> {
                 lua5_3_l::T_EQEQ => IROpcode::from(EQ),
                 _ => unimplemented!("Instruction {:#?}", node),
             };
-            (opcode, vec![Arg::Reg(reg), Arg::Reg(lreg), Arg::Reg(rreg)])
+            Instr::ThreeArg(opcode, Arg::Reg(reg), Arg::Reg(lreg), Arg::Reg(rreg))
         } else {
             panic!("Expected a Node::Term!");
         }
@@ -769,14 +788,12 @@ impl<'a> LuaToIR<'a> {
                 // create a new block
                 let parent = self.curr_block;
                 let elif_block = self.curr_func().create_block_with_parents(vec![parent]);
-                self.push_instr(
+                self.instrs().push(Instr::ThreeArg(
                     IROpcode::Branch,
-                    vec![
-                        Arg::Reg(expr_res),
-                        Arg::Some(true_block),
-                        Arg::Some(elif_block),
-                    ],
-                );
+                    Arg::Reg(expr_res),
+                    Arg::Some(true_block),
+                    Arg::Some(elif_block),
+                ));
                 self.curr_block = elif_block;
                 self.curr_block().push_dominator(before);
                 last_true_block
@@ -794,7 +811,8 @@ impl<'a> LuaToIR<'a> {
         for &branch in &branches {
             let curr = self.curr_block;
             self.get_block(branch)
-                .push_instr(IROpcode::Branch, vec![Arg::Some(curr)]);
+                .mut_instrs()
+                .push(Instr::OneArg(IROpcode::Branch, Arg::Some(curr)));
             self.get_block(curr).push_parent(branch);
         }
         if !process_else {
@@ -831,7 +849,7 @@ impl<'a> LuaToIR<'a> {
             let new_reg = self.curr_func().get_new_reg();
             args.insert(0, Arg::Reg(new_reg));
             self.curr_block().set_reg_name(new_reg, name, false);
-            self.push_instr(IROpcode::Phi, args);
+            self.instrs().push(Instr::NArg(IROpcode::Phi, args));
         }
     }
 
@@ -913,22 +931,24 @@ mod tests {
         let pt = &LuaParseTree::from_str(String::from("x = 1 + 2 * 3 / 2 ^ 2.0 // 1 - 2")).unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
-            Instr::new(IROpcode::from(MOV), vec![Reg(0), Int(1)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(1), Int(2)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(3)]),
-            Instr::new(IROpcode::from(MUL), vec![Reg(3), Reg(1), Reg(2)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(4), Int(2)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(5), Float(2.0)]),
-            Instr::new(IROpcode::from(EXP), vec![Reg(6), Reg(4), Reg(5)]),
-            Instr::new(IROpcode::from(DIV), vec![Reg(7), Reg(3), Reg(6)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(8), Int(1)]),
-            Instr::new(IROpcode::from(FDIV), vec![Reg(9), Reg(7), Reg(8)]),
-            Instr::new(IROpcode::from(ADD), vec![Reg(10), Reg(0), Reg(9)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(11), Int(2)]),
-            Instr::new(IROpcode::from(SUB), vec![Reg(12), Reg(10), Reg(11)]),
-            Instr::new(
+            Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(1)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(1), Int(2)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(3)),
+            Instr::ThreeArg(IROpcode::from(MUL), Reg(3), Reg(1), Reg(2)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(4), Int(2)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(5), Float(2.0)),
+            Instr::ThreeArg(IROpcode::from(EXP), Reg(6), Reg(4), Reg(5)),
+            Instr::ThreeArg(IROpcode::from(DIV), Reg(7), Reg(3), Reg(6)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(8), Int(1)),
+            Instr::ThreeArg(IROpcode::from(FDIV), Reg(9), Reg(7), Reg(8)),
+            Instr::ThreeArg(IROpcode::from(ADD), Reg(10), Reg(0), Reg(9)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(11), Int(2)),
+            Instr::ThreeArg(IROpcode::from(SUB), Reg(12), Reg(10), Reg(11)),
+            Instr::ThreeArg(
                 IROpcode::from(SetUpAttr),
-                vec![Some(0), Str("x".to_string()), Reg(12)],
+                Some(0),
+                Str("x".to_string()),
+                Reg(12),
             ),
         ];
         assert!(ir.functions.len() == 1);
@@ -946,18 +966,24 @@ mod tests {
         .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
-            Instr::new(IROpcode::from(MOV), vec![Reg(0), Int(1)]),
-            Instr::new(
+            Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(1)),
+            Instr::ThreeArg(
                 IROpcode::from(SetUpAttr),
-                vec![Some(0), Str("x".to_string()), Reg(0)],
+                Some(0),
+                Str("x".to_string()),
+                Reg(0),
             ),
-            Instr::new(
+            Instr::ThreeArg(
                 IROpcode::from(GetUpAttr),
-                vec![Reg(1), Some(0), Str("x".to_string())],
+                Reg(1),
+                Some(0),
+                Str("x".to_string()),
             ),
-            Instr::new(
+            Instr::ThreeArg(
                 IROpcode::from(SetUpAttr),
-                vec![Some(0), Str("y".to_string()), Reg(1)],
+                Some(0),
+                Str("y".to_string()),
+                Reg(1),
             ),
         ];
         assert!(ir.functions.len() == 1);
@@ -975,10 +1001,12 @@ mod tests {
         .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
-            Instr::new(IROpcode::from(MOV), vec![Reg(0), Int(2)]),
-            Instr::new(
+            Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(2)),
+            Instr::ThreeArg(
                 IROpcode::from(SetUpAttr),
-                vec![Some(0), Str("y".to_string()), Reg(0)],
+                Some(0),
+                Str("y".to_string()),
+                Reg(0),
             ),
         ];
         assert!(ir.functions.len() == 1);
@@ -998,17 +1026,21 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(CLOSURE), vec![Reg(0), Func(1)]),
-                Instr::new(
+                Instr::TwoArg(IROpcode::from(CLOSURE), Reg(0), Func(1)),
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("f".to_string()), Reg(0)],
+                    Some(0),
+                    Str("f".to_string()),
+                    Reg(0),
                 ),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(0), Int(3)]),
-                Instr::new(
+                Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(3)),
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("x".to_string()), Reg(0)],
+                    Some(0),
+                    Str("x".to_string()),
+                    Reg(0),
                 ),
             ],
         ];
@@ -1033,29 +1065,37 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(CLOSURE), vec![Reg(0), Func(1)]),
-                Instr::new(
+                Instr::TwoArg(IROpcode::from(CLOSURE), Reg(0), Func(1)),
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("f".to_string()), Reg(0)],
+                    Some(0),
+                    Str("f".to_string()),
+                    Reg(0),
                 ),
-                Instr::new(
+                Instr::ThreeArg(
                     IROpcode::from(GetUpAttr),
-                    vec![Reg(1), Some(0), Str("f".to_string())],
+                    Reg(1),
+                    Some(0),
+                    Str("f".to_string()),
                 ),
-                Instr::new(IROpcode::from(SetTop), vec![Reg(1)]),
-                Instr::new(IROpcode::from(CALL), vec![Reg(1)]),
-                Instr::new(
+                Instr::OneArg(IROpcode::from(SetTop), Reg(1)),
+                Instr::OneArg(IROpcode::from(CALL), Reg(1)),
+                Instr::ThreeArg(
                     IROpcode::from(GetUpAttr),
-                    vec![Reg(2), Some(0), Str("f".to_string())],
+                    Reg(2),
+                    Some(0),
+                    Str("f".to_string()),
                 ),
-                Instr::new(IROpcode::from(SetTop), vec![Reg(2)]),
-                Instr::new(IROpcode::from(CALL), vec![Reg(2)]),
+                Instr::OneArg(IROpcode::from(SetTop), Reg(2)),
+                Instr::OneArg(IROpcode::from(CALL), Reg(2)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(0), Int(3)]),
-                Instr::new(
+                Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(3)),
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("x".to_string()), Reg(0)],
+                    Some(0),
+                    Str("x".to_string()),
+                    Reg(0),
                 ),
             ],
         ];
@@ -1080,34 +1120,44 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(CLOSURE), vec![Reg(0), Func(1)]),
-                Instr::new(
+                Instr::TwoArg(IROpcode::from(CLOSURE), Reg(0), Func(1)),
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("f".to_string()), Reg(0)],
+                    Some(0),
+                    Str("f".to_string()),
+                    Reg(0),
                 ),
-                Instr::new(
+                Instr::ThreeArg(
                     IROpcode::from(GetUpAttr),
-                    vec![Reg(1), Some(0), Str("f".to_string())],
+                    Reg(1),
+                    Some(0),
+                    Str("f".to_string()),
                 ),
-                Instr::new(IROpcode::from(SetTop), vec![Reg(1)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(2)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(2)]),
-                Instr::new(IROpcode::from(CALL), vec![Reg(1)]),
-                Instr::new(
+                Instr::OneArg(IROpcode::from(SetTop), Reg(1)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(2)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(2)),
+                Instr::OneArg(IROpcode::from(CALL), Reg(1)),
+                Instr::ThreeArg(
                     IROpcode::from(GetUpAttr),
-                    vec![Reg(3), Some(0), Str("f".to_string())],
+                    Reg(3),
+                    Some(0),
+                    Str("f".to_string()),
                 ),
-                Instr::new(IROpcode::from(SetTop), vec![Reg(3)]),
-                Instr::new(
+                Instr::OneArg(IROpcode::from(SetTop), Reg(3)),
+                Instr::ThreeArg(
                     IROpcode::from(GetUpAttr),
-                    vec![Reg(4), Some(0), Str("x".to_string())],
+                    Reg(4),
+                    Some(0),
+                    Str("x".to_string()),
                 ),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(4)]),
-                Instr::new(IROpcode::from(CALL), vec![Reg(3)]),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(4)),
+                Instr::OneArg(IROpcode::from(CALL), Reg(3)),
             ],
-            vec![Instr::new(
+            vec![Instr::ThreeArg(
                 IROpcode::from(SetUpAttr),
-                vec![Some(0), Str("x".to_string()), Reg(0)],
+                Some(0),
+                Str("x".to_string()),
+                Reg(0),
             )],
         ];
         assert!(ir.functions.len() == 2);
@@ -1128,23 +1178,27 @@ mod tests {
         .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
-            Instr::new(IROpcode::from(MOV), vec![Reg(0), Int(1)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(1), Int(3)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(2), Nil]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(3), Nil]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(4), Int(1)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(5), Int(4)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(6), Int(5)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(7), Int(6)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(8), Int(1)]),
-            Instr::new(IROpcode::from(MOV), vec![Reg(9), Nil]),
-            Instr::new(
+            Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(1)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(1), Int(3)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(2), Nil),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(3), Nil),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(4), Int(1)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(5), Int(4)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(6), Int(5)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(7), Int(6)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(8), Int(1)),
+            Instr::TwoArg(IROpcode::from(MOV), Reg(9), Nil),
+            Instr::ThreeArg(
                 IROpcode::from(SetUpAttr),
-                vec![Some(0), Str("a".to_string()), Reg(8)],
+                Some(0),
+                Str("a".to_string()),
+                Reg(8),
             ),
-            Instr::new(
+            Instr::ThreeArg(
                 IROpcode::from(SetUpAttr),
-                vec![Some(0), Str("b".to_string()), Reg(9)],
+                Some(0),
+                Str("b".to_string()),
+                Reg(9),
             ),
         ];
         assert!(ir.functions.len() == 1);
@@ -1166,37 +1220,43 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(CLOSURE), vec![Reg(0), Func(1)]),
-                Instr::new(
+                Instr::TwoArg(IROpcode::from(CLOSURE), Reg(0), Func(1)),
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("f".to_string()), Reg(0)],
+                    Some(0),
+                    Str("f".to_string()),
+                    Reg(0),
                 ),
-                Instr::new(
+                Instr::ThreeArg(
                     IROpcode::from(GetUpAttr),
-                    vec![Reg(1), Some(0), Str("f".to_string())],
+                    Reg(1),
+                    Some(0),
+                    Str("f".to_string()),
                 ),
-                Instr::new(IROpcode::from(SetTop), vec![Reg(1)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(1)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(2)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(3), Int(2)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(3)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(4), Int(3)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(4)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(5), Int(4)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(5)]),
-                Instr::new(IROpcode::from(CALL), vec![Reg(1)]),
+                Instr::OneArg(IROpcode::from(SetTop), Reg(1)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(1)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(2)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(3), Int(2)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(3)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(4), Int(3)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(4)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(5), Int(4)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(5)),
+                Instr::OneArg(IROpcode::from(CALL), Reg(1)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(2), Reg(0)]),
-                Instr::new(IROpcode::from(VarArg), vec![Reg(3), Some(0)]),
-                Instr::new(IROpcode::from(VarArg), vec![Reg(4), Some(1)]),
-                Instr::new(
+                Instr::TwoArg(IROpcode::from(MOV), Reg(2), Reg(0)),
+                Instr::TwoArg(IROpcode::from(VarArg), Reg(3), Some(0)),
+                Instr::TwoArg(IROpcode::from(VarArg), Reg(4), Some(1)),
+                Instr::ThreeArg(
                     IROpcode::from(GetUpAttr),
-                    vec![Reg(5), Some(0), Str("f".to_string())],
+                    Reg(5),
+                    Some(0),
+                    Str("f".to_string()),
                 ),
-                Instr::new(IROpcode::from(SetTop), vec![Reg(5)]),
-                Instr::new(IROpcode::from(VarArg), vec![Some(0), Some(0), Some(1)]),
-                Instr::new(IROpcode::from(CALL), vec![Reg(5)]),
+                Instr::OneArg(IROpcode::from(SetTop), Reg(5)),
+                Instr::OneArg(IROpcode::from(VarArg), Some(1)),
+                Instr::OneArg(IROpcode::from(CALL), Reg(5)),
             ],
         ];
         assert!(ir.functions.len() == 2);
@@ -1219,40 +1279,50 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(CLOSURE), vec![Reg(0), Func(1)]),
-                Instr::new(
+                Instr::TwoArg(IROpcode::from(CLOSURE), Reg(0), Func(1)),
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("f".to_string()), Reg(0)],
+                    Some(0),
+                    Str("f".to_string()),
+                    Reg(0),
                 ),
-                Instr::new(
+                Instr::ThreeArg(
                     IROpcode::from(GetUpAttr),
-                    vec![Reg(1), Some(0), Str("f".to_string())],
+                    Reg(1),
+                    Some(0),
+                    Str("f".to_string()),
                 ),
-                Instr::new(IROpcode::from(SetTop), vec![Reg(1)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(1)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(2)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(3), Int(2)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(3)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(4), Int(3)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(4)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(5), Int(4)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(5)]),
-                Instr::new(IROpcode::from(CALL), vec![Reg(1)]),
+                Instr::OneArg(IROpcode::from(SetTop), Reg(1)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(1)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(2)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(3), Int(2)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(3)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(4), Int(3)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(4)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(5), Int(4)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(5)),
+                Instr::OneArg(IROpcode::from(CALL), Reg(1)),
             ],
             vec![
-                Instr::new(IROpcode::from(VarArg), vec![Reg(2), Some(0)]),
-                Instr::new(IROpcode::from(VarArg), vec![Reg(3), Some(1)]),
-                Instr::new(
+                Instr::TwoArg(IROpcode::from(VarArg), Reg(2), Some(0)),
+                Instr::TwoArg(IROpcode::from(VarArg), Reg(3), Some(1)),
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("x".to_string()), Reg(0)],
+                    Some(0),
+                    Str("x".to_string()),
+                    Reg(0),
                 ),
-                Instr::new(
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("y".to_string()), Reg(2)],
+                    Some(0),
+                    Str("y".to_string()),
+                    Reg(2),
                 ),
-                Instr::new(
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("z".to_string()), Reg(3)],
+                    Some(0),
+                    Str("z".to_string()),
+                    Reg(3),
                 ),
             ],
         ];
@@ -1276,33 +1346,39 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(CLOSURE), vec![Reg(0), Func(1)]),
-                Instr::new(
+                Instr::TwoArg(IROpcode::from(CLOSURE), Reg(0), Func(1)),
+                Instr::ThreeArg(
                     IROpcode::from(SetUpAttr),
-                    vec![Some(0), Str("f".to_string()), Reg(0)],
+                    Some(0),
+                    Str("f".to_string()),
+                    Reg(0),
                 ),
-                Instr::new(
+                Instr::ThreeArg(
                     IROpcode::from(GetUpAttr),
-                    vec![Reg(1), Some(0), Str("f".to_string())],
+                    Reg(1),
+                    Some(0),
+                    Str("f".to_string()),
                 ),
-                Instr::new(IROpcode::from(SetTop), vec![Reg(1)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(1)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(2)]),
-                Instr::new(
+                Instr::OneArg(IROpcode::from(SetTop), Reg(1)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(1)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(2)),
+                Instr::ThreeArg(
                     IROpcode::from(GetUpAttr),
-                    vec![Reg(3), Some(0), Str("f".to_string())],
+                    Reg(3),
+                    Some(0),
+                    Str("f".to_string()),
                 ),
-                Instr::new(IROpcode::from(SetTop), vec![Reg(3)]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(4), Int(5)]),
-                Instr::new(IROpcode::from(PUSH), vec![Reg(4)]),
-                Instr::new(IROpcode::from(CALL), vec![Reg(3)]),
-                Instr::new(IROpcode::from(MOVR), vec![Some(0), Some(0), Some(1)]),
-                Instr::new(IROpcode::from(CALL), vec![Reg(1)]),
+                Instr::OneArg(IROpcode::from(SetTop), Reg(3)),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(4), Int(5)),
+                Instr::OneArg(IROpcode::from(PUSH), Reg(4)),
+                Instr::OneArg(IROpcode::from(CALL), Reg(3)),
+                Instr::OneArg(IROpcode::from(MOVR), Some(1)),
+                Instr::OneArg(IROpcode::from(CALL), Reg(1)),
             ],
             vec![
-                Instr::new(IROpcode::from(PUSH), vec![Reg(0), Some(0), Some(1)]),
-                Instr::new(IROpcode::from(VarArg), vec![Some(0), Some(0), Some(2)]),
-                Instr::new(IROpcode::from(RET), vec![]),
+                Instr::ThreeArg(IROpcode::from(PUSH), Reg(0), Some(0), Some(1)),
+                Instr::OneArg(IROpcode::from(VarArg), Some(2)),
+                Instr::ZeroArg(IROpcode::from(RET)),
             ],
         ];
         assert!(ir.functions.len() == 2);
@@ -1327,16 +1403,16 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(0), Int(1)]),
-                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(2)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(1)),
+                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(2)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(1), Int(2)]),
-                Instr::new(IROpcode::Branch, vec![Some(3)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(1), Int(2)),
+                Instr::OneArg(IROpcode::Branch, Some(3)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(2)]),
-                Instr::new(IROpcode::Branch, vec![Some(3)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(2)),
+                Instr::OneArg(IROpcode::Branch, Some(3)),
             ],
             vec![],
         ];
@@ -1363,12 +1439,12 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(0), Int(1)]),
-                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(2)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(1)),
+                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(2)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(1), Int(2)]),
-                Instr::new(IROpcode::Branch, vec![Some(2)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(1), Int(2)),
+                Instr::OneArg(IROpcode::Branch, Some(2)),
             ],
             vec![],
         ];
@@ -1401,30 +1477,30 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(0), Nil]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(1), Nil]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(2), Nil]),
-                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(2)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(0), Nil),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(1), Nil),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(2), Nil),
+                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(2)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(3), Int(2)]),
-                Instr::new(IROpcode::Branch, vec![Some(7)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(3), Int(2)),
+                Instr::OneArg(IROpcode::Branch, Some(7)),
             ],
-            vec![Instr::new(IROpcode::Branch, vec![Reg(1), Some(3), Some(4)])],
+            vec![Instr::ThreeArg(IROpcode::Branch, Reg(1), Some(3), Some(4))],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(4), Int(3)]),
-                Instr::new(IROpcode::Branch, vec![Some(7)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(4), Int(3)),
+                Instr::OneArg(IROpcode::Branch, Some(7)),
             ],
-            vec![Instr::new(IROpcode::Branch, vec![Reg(2), Some(5), Some(6)])],
+            vec![Instr::ThreeArg(IROpcode::Branch, Reg(2), Some(5), Some(6))],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(5), Int(4)]),
-                Instr::new(IROpcode::Branch, vec![Some(7)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(5), Int(4)),
+                Instr::OneArg(IROpcode::Branch, Some(7)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(6), Int(5)]),
-                Instr::new(IROpcode::Branch, vec![Some(7)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(6), Int(5)),
+                Instr::OneArg(IROpcode::Branch, Some(7)),
             ],
-            vec![Instr::new(
+            vec![Instr::NArg(
                 IROpcode::Phi,
                 vec![Reg(7), Reg(1), Reg(3), Reg(4), Reg(5), Reg(6)],
             )],
@@ -1472,20 +1548,20 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(0), Nil]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(1), Nil]),
-                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(2)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(0), Nil),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(1), Nil),
+                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(2)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(2)]),
-                Instr::new(IROpcode::Branch, vec![Some(4)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(2)),
+                Instr::OneArg(IROpcode::Branch, Some(4)),
             ],
-            vec![Instr::new(IROpcode::Branch, vec![Reg(1), Some(3), Some(4)])],
+            vec![Instr::ThreeArg(IROpcode::Branch, Reg(1), Some(3), Some(4))],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(3), Int(3)]),
-                Instr::new(IROpcode::Branch, vec![Some(4)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(3), Int(3)),
+                Instr::OneArg(IROpcode::Branch, Some(4)),
             ],
-            vec![Instr::new(
+            vec![Instr::NArg(
                 IROpcode::Phi,
                 vec![Reg(4), Reg(1), Reg(2), Reg(3)],
             )],
@@ -1516,23 +1592,23 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(0), Nil]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(1), Nil]),
-                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(4)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(0), Nil),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(1), Nil),
+                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(4)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(2)]),
-                Instr::new(IROpcode::Branch, vec![Reg(2), Some(2), Some(3)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(2)),
+                Instr::ThreeArg(IROpcode::Branch, Reg(2), Some(2), Some(3)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(3), Int(3)]),
-                Instr::new(IROpcode::Branch, vec![Some(3)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(3), Int(3)),
+                Instr::OneArg(IROpcode::Branch, Some(3)),
             ],
             vec![
-                Instr::new(IROpcode::Phi, vec![Reg(4), Reg(2)]),
-                Instr::new(IROpcode::Branch, vec![Some(4)]),
+                Instr::NArg(IROpcode::Phi, vec![Reg(4), Reg(2)]),
+                Instr::OneArg(IROpcode::Branch, Some(4)),
             ],
-            vec![Instr::new(IROpcode::Phi, vec![Reg(5), Reg(1), Reg(4)])],
+            vec![Instr::NArg(IROpcode::Phi, vec![Reg(5), Reg(1), Reg(4)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![1], vec![1, 2], vec![0, 3]];
         let expected_dominators = vec![vec![], vec![0], vec![1], vec![1], vec![0]];
@@ -1562,27 +1638,27 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(0), Nil]),
-                Instr::new(IROpcode::from(MOV), vec![Reg(1), Nil]),
-                Instr::new(IROpcode::Branch, vec![Reg(0), Some(1), Some(5)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(0), Nil),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(1), Nil),
+                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(5)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(2), Int(2)]),
-                Instr::new(IROpcode::Branch, vec![Reg(2), Some(2), Some(3)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(2)),
+                Instr::ThreeArg(IROpcode::Branch, Reg(2), Some(2), Some(3)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(3), Int(3)]),
-                Instr::new(IROpcode::Branch, vec![Some(4)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(3), Int(3)),
+                Instr::OneArg(IROpcode::Branch, Some(4)),
             ],
             vec![
-                Instr::new(IROpcode::from(MOV), vec![Reg(4), Int(4)]),
-                Instr::new(IROpcode::Branch, vec![Some(4)]),
+                Instr::TwoArg(IROpcode::from(MOV), Reg(4), Int(4)),
+                Instr::OneArg(IROpcode::Branch, Some(4)),
             ],
             vec![
-                Instr::new(IROpcode::Phi, vec![Reg(5), Reg(2)]),
-                Instr::new(IROpcode::Branch, vec![Some(5)]),
+                Instr::NArg(IROpcode::Phi, vec![Reg(5), Reg(2)]),
+                Instr::OneArg(IROpcode::Branch, Some(5)),
             ],
-            vec![Instr::new(IROpcode::Phi, vec![Reg(6), Reg(1), Reg(5)])],
+            vec![Instr::NArg(IROpcode::Phi, vec![Reg(6), Reg(1), Reg(5)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![1], vec![1], vec![2, 3], vec![0, 4]];
         let expected_dominators = vec![vec![], vec![0], vec![1], vec![1], vec![1], vec![0]];

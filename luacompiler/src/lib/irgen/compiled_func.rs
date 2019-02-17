@@ -31,12 +31,12 @@ impl<'a> BasicBlock<'a> {
         }
     }
 
-    pub fn push_instr(&mut self, opcode: IROpcode, args: Vec<Arg>) {
-        self.instrs.push(Instr { opcode, args });
-    }
-
     pub fn instrs(&self) -> &Vec<Instr> {
         &self.instrs
+    }
+
+    pub fn mut_instrs(&mut self) -> &mut Vec<Instr> {
+        &mut self.instrs
     }
 
     pub fn get(&self, i: usize) -> &Instr {
@@ -50,7 +50,7 @@ impl<'a> BasicBlock<'a> {
     pub fn get_instr_with_opcode(&mut self, op: IROpcode) -> &mut Instr {
         let mut index = 0;
         for i in (0..self.instrs.len()).rev() {
-            if self.instrs[i].opcode == op {
+            if self.instrs[i].opcode() == op {
                 index = i;
                 break;
             }
