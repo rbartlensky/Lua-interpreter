@@ -5,6 +5,7 @@ extern crate luacompiler;
 #[macro_use]
 #[cfg(test)]
 extern crate assert_float_eq;
+extern crate ieee754;
 
 mod errors;
 mod instructions;
@@ -56,6 +57,7 @@ const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
     set_up_attr,
     jmp,
     jmp_if,
+    lt,
 ];
 
 /// Represents a `LuaBytecode` interpreter.

@@ -1,5 +1,5 @@
 local a, b = 1, 1
-while a == 1 do
+while a == 0 do
    b = b + 1
 end
 

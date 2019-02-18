@@ -12,9 +12,11 @@ use self::{
 use crate::stdlib::StdFunction;
 use errors::LuaError;
 use gc::{Finalize, Gc, Trace};
+use ieee754::Ieee754;
 use lua_values::lua_table::LuaTable;
 use luacompiler::bytecode::Function;
 use std::{
+    cmp::Ordering,
     fmt,
     fmt::{Display, Formatter},
     hash::{Hash, Hasher},
@@ -459,6 +461,26 @@ impl Display for LuaVal {
                 (*closure_ptr(self.val)).addr()
             }),
             _ => write!(f, "{}", self.to_string().unwrap()),
+        }
+    }
+}
+
+impl PartialOrd for LuaVal {
+    fn partial_cmp(&self, other: &LuaVal) -> Option<Ordering> {
+        if self.is_number() && other.is_number() {
+            Some(
+                self.to_float()
+                    .unwrap()
+                    .total_cmp(&other.to_float().unwrap()),
+            )
+        } else if self.is_string() && other.is_string() {
+            Some(
+                self.get_string_ref()
+                    .unwrap()
+                    .cmp(other.get_string_ref().unwrap()),
+            )
+        } else {
+            None
         }
     }
 }

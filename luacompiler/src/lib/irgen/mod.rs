@@ -758,6 +758,7 @@ impl<'a> LuaToIR<'a> {
                 lua5_3_l::T_FSFS => IROpcode::from(FDIV),
                 lua5_3_l::T_CARET => IROpcode::from(EXP),
                 lua5_3_l::T_EQEQ => IROpcode::from(EQ),
+                lua5_3_l::T_LT => IROpcode::from(LT),
                 _ => unimplemented!("Instruction {:#?}", node),
             };
             Instr::ThreeArg(opcode, Arg::Reg(reg), Arg::Reg(lreg), Arg::Reg(rreg))
