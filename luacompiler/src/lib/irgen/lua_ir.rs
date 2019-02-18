@@ -29,7 +29,7 @@ impl<'a> LuaIR<'a> {
                 }
             }
             for (bb, args) in points {
-                for block in &mut self.functions[f].get_mut_blocks()[..bb] {
+                for block in &mut self.functions[f].get_mut_blocks()[..bb + 1] {
                     block.replace_regs_with(&args[1..], &args[0])
                 }
             }

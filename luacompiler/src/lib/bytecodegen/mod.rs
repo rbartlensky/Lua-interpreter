@@ -50,10 +50,9 @@ impl<'a> LuaIRToLuaBc<'a> {
             self.compile_basic_block(i, bb, &mut instrs);
         }
         for (instr, bb) in &self.branches {
-            if opcode(instrs[*instr]) == Jmp as u8 {
-                set_first_arg(&mut instrs[*instr], (self.blocks[&bb] - instr - 1) as u8);
-            } else if opcode(instrs[*instr]) == JmpIf as u8 {
-                set_second_arg(&mut instrs[*instr], (self.blocks[&bb] - instr - 1) as u8);
+            if opcode(instrs[*instr]) == Jmp as u8 || opcode(instrs[*instr]) == JmpIf as u8 {
+                let jmp: i16 = self.blocks[&bb] as i16 - *instr as i16 - 1;
+                set_extended_arg(&mut instrs[*instr], jmp);
             }
         }
         self.branches.clear();

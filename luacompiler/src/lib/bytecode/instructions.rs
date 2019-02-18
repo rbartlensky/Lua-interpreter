@@ -1,4 +1,5 @@
 const MASK: u32 = 0x000000FF;
+const EXTENDED_MASK: u32 = 0x0000FFFF;
 
 /// Get the opcode of an instruction
 #[inline]
@@ -34,10 +35,27 @@ pub const fn third_arg(instr: u32) -> u8 {
     ((instr >> 24) & MASK) as u8
 }
 
+/// Get the second argument of an instruction.
+#[inline]
+pub const fn extended_arg(instr: u32) -> i16 {
+    ((instr >> 16) & EXTENDED_MASK) as i16
+}
+
+#[inline]
+pub fn set_extended_arg(instr: &mut u32, v: i16) {
+    *instr |= (v as u32) << 16;
+}
+
 /// Create an instruction with the given opcode and arguments.
 #[inline]
 pub const fn make_instr(opcode: Opcode, arg1: u8, arg2: u8, arg3: u8) -> u32 {
     opcode as u32 + ((arg1 as u32) << 8) + ((arg2 as u32) << 16) + ((arg3 as u32) << 24)
+}
+
+/// Create an instruction with the given opcode and arguments.
+#[inline]
+pub const fn make_extended_instr(opcode: Opcode, arg1: u8, arg2: i16) -> u32 {
+    opcode as u32 + ((arg1 as u32) << 8) + ((arg2 as u32) << 16)
 }
 
 pub fn format_instr(instr: u32) -> String {
