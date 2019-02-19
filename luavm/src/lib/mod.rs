@@ -58,6 +58,10 @@ const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
     jmp,
     jmp_if,
     lt,
+    gt,
+    le,
+    ge,
+    ne,
 ];
 
 /// Represents a `LuaBytecode` interpreter.

@@ -85,7 +85,8 @@ impl<'a> LuaIRToLuaBc<'a> {
                 }
             }
             Opcode(ADD) | Opcode(SUB) | Opcode(MUL) | Opcode(DIV) | Opcode(MOD) | Opcode(FDIV)
-            | Opcode(EXP) | Opcode(EQ) | Opcode(LT) => {
+            | Opcode(EXP) | Opcode(EQ) | Opcode(LT) | Opcode(GT) | Opcode(LE) | Opcode(GE)
+            | Opcode(NE) => {
                 if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
                     instrs.push(make_instr(
                         opcode.opcode(),

@@ -86,6 +86,10 @@ pub fn format_instr(instr: u32) -> String {
         23 => "Jmp",
         24 => "JmpIf",
         25 => "LT",
+        26 => "GT",
+        27 => "LE",
+        28 => "GE",
+        29 => "NE",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(
@@ -136,7 +140,11 @@ pub enum Opcode {
     SetUpAttr = 22, // Upvals[Arg(1)][Arg(2)] = R(3)
     Jmp = 23,
     JmpIf = 24,
-    LT = 25,
+    LT = 25, // R(1) = R(2) < R(3)
+    GT = 26, // R(1) = R(2) > R(3)
+    LE = 27, // R(1) = R(2) <= R(3)
+    GE = 28, // R(1) = R(2) >= R(3)
+    NE = 29, // R(1) = R(2) != R(3)
 }
 
 #[cfg(test)]

@@ -781,6 +781,10 @@ impl<'a> LuaToIR<'a> {
                 lua5_3_l::T_CARET => IROpcode::from(EXP),
                 lua5_3_l::T_EQEQ => IROpcode::from(EQ),
                 lua5_3_l::T_LT => IROpcode::from(LT),
+                lua5_3_l::T_GT => IROpcode::from(GT),
+                lua5_3_l::T_LE => IROpcode::from(LE),
+                lua5_3_l::T_GE => IROpcode::from(GE),
+                lua5_3_l::T_NOTEQ => IROpcode::from(NE),
                 _ => unimplemented!("Instruction {:#?}", node),
             };
             Instr::ThreeArg(opcode, Arg::Reg(reg), Arg::Reg(lreg), Arg::Reg(rreg))
@@ -992,7 +996,7 @@ impl<'a> LuaToIR<'a> {
         let while_condition_index = self.create_child_block();
         let condition_reg = self.curr_func().get_new_reg();
         self.instrs().push(Instr::ThreeArg(
-            IROpcode::from(LT),
+            IROpcode::from(LE),
             Arg::Reg(condition_reg),
             Arg::Reg(start_reg),
             Arg::Reg(regs[0]),
