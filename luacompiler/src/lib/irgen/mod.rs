@@ -37,6 +37,15 @@ enum VariableType {
     Global(usize),
 }
 
+impl VariableType {
+    fn get_reg(&self) -> usize {
+        match *self {
+            VariableType::Local(reg) => reg,
+            VariableType::Global(reg) => reg,
+        }
+    }
+}
+
 /// Represents a compiler which translates a given Lua parse tree to an SSA IR.
 struct LuaToIR<'a> {
     pt: &'a LuaParseTree,
@@ -122,6 +131,14 @@ impl<'a> LuaToIR<'a> {
         self.compile_stat_list(&nodes[0]);
         self.compile_retstat(&nodes[1]);
         self.curr_block = old_block;
+    }
+
+    pub fn create_child_block(&mut self) -> usize {
+        let parent = self.curr_block;
+        self.curr_func().create_block_with_parents(vec![parent]);
+        self.curr_block = parent + 1;
+        self.curr_block().push_dominator(parent);
+        parent + 1
     }
 
     /// Compile <retstatopt>
@@ -280,6 +297,11 @@ impl<'a> LuaToIR<'a> {
                 );
             } else if is_term(&stat_nodes[0], lua5_3_l::T_WHILE) {
                 self.compile_while(&stat_nodes[1], &stat_nodes[3]);
+            } else if is_term(&stat_nodes[0], lua5_3_l::T_FOR) && stat_nodes.len() == 9 {
+                // stat_nodes = [<FOR>, <NAME>, <EQ>, <exp>, <COMMA>,
+                //               <explist>, <DO>, <block>, <END>]
+                let name = self.compile_variable(&stat_nodes[1]);
+                self.compile_for_count(name, &stat_nodes[3], &stat_nodes[5], &stat_nodes[7]);
             }
         }
     }
@@ -905,6 +927,17 @@ impl<'a> LuaToIR<'a> {
         self.curr_block = new_block;
         let expr_reg = self.compile_expr(expr);
         // compile the while loop block
+        self.compile_while_body(new_block, expr_reg, block, vec![], vec![]);
+    }
+
+    fn compile_while_body(
+        &mut self,
+        new_block: usize,
+        expr_reg: usize,
+        block: &'a Node<u8>,
+        additional_instrs: Vec<Instr>,
+        reg_map_updates: Vec<(usize, &'a str)>,
+    ) {
         let while_block = self.compile_block(block);
         let last_block = self.curr_func().blocks().len();
         self.get_block(new_block).mut_instrs().push(Instr::ThreeArg(
@@ -917,6 +950,10 @@ impl<'a> LuaToIR<'a> {
         if !self.curr_block().dominators().contains(&new_block) {
             self.curr_block().push_dominator(new_block);
         }
+        self.instrs().extend(additional_instrs);
+        for (reg, name) in reg_map_updates {
+            self.curr_block().set_reg_name(reg, name, false);
+        }
         self.generate_phis(new_block);
         self.curr_block()
             .mut_instrs()
@@ -925,6 +962,56 @@ impl<'a> LuaToIR<'a> {
         self.curr_block = after_block;
         self.curr_block().push_dominator(new_block);
         self.generate_phis(last_block - 1);
+    }
+
+    fn compile_for_count(
+        &mut self,
+        name: &'a str,
+        expr: &'a Node<u8>,
+        exprs: &'a Node<u8>,
+        block: &'a Node<u8>,
+    ) {
+        self.create_child_block();
+        let start_reg = self
+            .compile_assignment(name, expr, AssignmentType::LocalDecl)
+            .get_reg();
+        let exprs = self.get_underlying_exprs(exprs);
+        let mut regs: Vec<usize> = exprs.iter().map(|e| self.compile_expr(e)).collect();
+        if regs.len() > 2 {
+            panic!("Too many expression in for-loop.");
+        } else if regs.len() == 1 {
+            let new_reg = self.curr_func().get_new_reg();
+            self.curr_block().mut_instrs().push(Instr::TwoArg(
+                IROpcode::from(MOV),
+                Arg::Reg(new_reg),
+                Arg::Int(1),
+            ));
+            regs.push(new_reg);
+        }
+        // compile while loop condition
+        let while_condition_index = self.create_child_block();
+        let condition_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::ThreeArg(
+            IROpcode::from(LT),
+            Arg::Reg(condition_reg),
+            Arg::Reg(start_reg),
+            Arg::Reg(regs[0]),
+        ));
+        let new_reg = self.curr_func().get_new_reg();
+        let additional_instrs = vec![Instr::ThreeArg(
+            IROpcode::from(ADD),
+            Arg::Reg(new_reg),
+            Arg::Reg(start_reg),
+            Arg::Reg(regs[1]),
+        )];
+        let reg_map_updates = vec![(new_reg, name)];
+        self.compile_while_body(
+            while_condition_index,
+            condition_reg,
+            block,
+            additional_instrs,
+            reg_map_updates,
+        );
     }
 }
 
