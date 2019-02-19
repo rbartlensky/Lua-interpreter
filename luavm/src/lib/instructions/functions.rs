@@ -91,7 +91,7 @@ pub fn call(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     // if we returned values, then the next few instructions might move these into
     // registers using the MOVR instruction
     let len = vm.bytecode.get_function(vm.closure.index()).instrs_len();
-    if ret_vals > 0 && vm.pc + 1 < len {
+    if vm.pc + 1 < len {
         let mut instr = vm
             .bytecode
             .get_function(vm.closure.index())

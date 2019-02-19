@@ -135,10 +135,10 @@ impl<'a> LuaToIR<'a> {
 
     pub fn create_child_block(&mut self) -> usize {
         let parent = self.curr_block;
-        self.curr_func().create_block_with_parents(vec![parent]);
-        self.curr_block = parent + 1;
+        let curr_block = self.curr_func().create_block_with_parents(vec![parent]);
+        self.curr_block = curr_block;
         self.curr_block().push_dominator(parent);
-        parent + 1
+        self.curr_block
     }
 
     /// Compile <retstatopt>
@@ -550,6 +550,16 @@ impl<'a> LuaToIR<'a> {
                 reg
             }
             Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_EXP || ridx == lua5_3_y::R_EXP1 => {
+                if nodes.len() > 1 {
+                    self.compile_short_circuit(nodes)
+                } else {
+                    self.compile_expr(&nodes[0])
+                }
+            }
+            Nonterm {
                 ridx: RIdx(_ridx),
                 ref nodes,
             } => {
@@ -625,6 +635,31 @@ impl<'a> LuaToIR<'a> {
                 }
             }
         }
+    }
+
+    fn compile_short_circuit(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
+        let left = self.compile_expr(&nodes[0]);
+        let parent = self.curr_block;
+        let false_branch = self.create_child_block();
+        let right = self.compile_expr(&nodes[2]);
+        self.curr_block = parent;
+        let merge_branch = self.create_child_block();
+        let merge_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::NArg(
+            IROpcode::Phi,
+            vec![Arg::Reg(merge_reg), Arg::Reg(left), Arg::Reg(right)],
+        ));
+        self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
+            IROpcode::from(if is_term(&nodes[1], lua5_3_l::T_OR) {
+                JmpEQ
+            } else {
+                JmpNE
+            }),
+            Arg::Reg(left),
+            Arg::Some(merge_branch),
+            Arg::Some(false_branch),
+        ));
+        merge_reg
     }
 
     /// Compile an <explist> or <explistopt> and return the roots of the expressions.
@@ -818,7 +853,7 @@ impl<'a> LuaToIR<'a> {
                 let parent = self.curr_block;
                 let elif_block = self.curr_func().create_block_with_parents(vec![parent]);
                 self.instrs().push(Instr::ThreeArg(
-                    IROpcode::Branch,
+                    IROpcode::from(JmpNE),
                     Arg::Reg(expr_res),
                     Arg::Some(true_block),
                     Arg::Some(elif_block),
@@ -841,7 +876,7 @@ impl<'a> LuaToIR<'a> {
             let curr = self.curr_block;
             self.get_block(branch)
                 .mut_instrs()
-                .push(Instr::OneArg(IROpcode::Branch, Arg::Some(curr)));
+                .push(Instr::OneArg(IROpcode::from(Jmp), Arg::Some(curr)));
             self.get_block(curr).push_parent(branch);
         }
         if !process_else {
@@ -925,7 +960,7 @@ impl<'a> LuaToIR<'a> {
         // compile expr in a new block, and create a branching instruction to it
         self.curr_block()
             .mut_instrs()
-            .push(Instr::OneArg(IROpcode::Branch, Arg::Some(parent + 1)));
+            .push(Instr::OneArg(IROpcode::from(Jmp), Arg::Some(parent + 1)));
         let new_block = self.curr_func().create_block_with_parents(vec![parent]);
         self.get_block(new_block).push_dominator(parent);
         self.curr_block = new_block;
@@ -945,7 +980,7 @@ impl<'a> LuaToIR<'a> {
         let while_block = self.compile_block(block);
         let last_block = self.curr_func().blocks().len();
         self.get_block(new_block).mut_instrs().push(Instr::ThreeArg(
-            IROpcode::Branch,
+            IROpcode::from(JmpNE),
             Arg::Reg(expr_reg),
             Arg::Some(while_block),
             Arg::Some(last_block),
@@ -961,7 +996,7 @@ impl<'a> LuaToIR<'a> {
         self.generate_phis(new_block);
         self.curr_block()
             .mut_instrs()
-            .push(Instr::OneArg(IROpcode::Branch, Arg::Some(new_block)));
+            .push(Instr::OneArg(IROpcode::from(Jmp), Arg::Some(new_block)));
         let after_block = self.curr_func().create_block_with_parents(vec![new_block]);
         self.curr_block = after_block;
         self.curr_block().push_dominator(new_block);
@@ -1536,15 +1571,15 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(1)),
-                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(2)),
+                Instr::ThreeArg(IROpcode::from(JmpNE), Reg(0), Some(1), Some(2)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(1), Int(2)),
-                Instr::OneArg(IROpcode::Branch, Some(3)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(3)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(2)),
-                Instr::OneArg(IROpcode::Branch, Some(3)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(3)),
             ],
             vec![],
         ];
@@ -1572,11 +1607,11 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(1)),
-                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(2)),
+                Instr::ThreeArg(IROpcode::from(JmpNE), Reg(0), Some(1), Some(2)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(1), Int(2)),
-                Instr::OneArg(IROpcode::Branch, Some(2)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(2)),
             ],
             vec![],
         ];
@@ -1612,25 +1647,35 @@ mod tests {
                 Instr::TwoArg(IROpcode::from(MOV), Reg(0), Nil),
                 Instr::TwoArg(IROpcode::from(MOV), Reg(1), Nil),
                 Instr::TwoArg(IROpcode::from(MOV), Reg(2), Nil),
-                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(2)),
+                Instr::ThreeArg(IROpcode::from(JmpNE), Reg(0), Some(1), Some(2)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(3), Int(2)),
-                Instr::OneArg(IROpcode::Branch, Some(7)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(7)),
             ],
-            vec![Instr::ThreeArg(IROpcode::Branch, Reg(1), Some(3), Some(4))],
+            vec![Instr::ThreeArg(
+                IROpcode::from(JmpNE),
+                Reg(1),
+                Some(3),
+                Some(4),
+            )],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(4), Int(3)),
-                Instr::OneArg(IROpcode::Branch, Some(7)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(7)),
             ],
-            vec![Instr::ThreeArg(IROpcode::Branch, Reg(2), Some(5), Some(6))],
+            vec![Instr::ThreeArg(
+                IROpcode::from(JmpNE),
+                Reg(2),
+                Some(5),
+                Some(6),
+            )],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(5), Int(4)),
-                Instr::OneArg(IROpcode::Branch, Some(7)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(7)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(6), Int(5)),
-                Instr::OneArg(IROpcode::Branch, Some(7)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(7)),
             ],
             vec![Instr::NArg(
                 IROpcode::Phi,
@@ -1682,16 +1727,21 @@ mod tests {
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(0), Nil),
                 Instr::TwoArg(IROpcode::from(MOV), Reg(1), Nil),
-                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(2)),
+                Instr::ThreeArg(IROpcode::from(JmpNE), Reg(0), Some(1), Some(2)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(2)),
-                Instr::OneArg(IROpcode::Branch, Some(4)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(4)),
             ],
-            vec![Instr::ThreeArg(IROpcode::Branch, Reg(1), Some(3), Some(4))],
+            vec![Instr::ThreeArg(
+                IROpcode::from(JmpNE),
+                Reg(1),
+                Some(3),
+                Some(4),
+            )],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(3), Int(3)),
-                Instr::OneArg(IROpcode::Branch, Some(4)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(4)),
             ],
             vec![Instr::NArg(
                 IROpcode::Phi,
@@ -1726,19 +1776,19 @@ mod tests {
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(0), Nil),
                 Instr::TwoArg(IROpcode::from(MOV), Reg(1), Nil),
-                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(4)),
+                Instr::ThreeArg(IROpcode::from(JmpNE), Reg(0), Some(1), Some(4)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(2)),
-                Instr::ThreeArg(IROpcode::Branch, Reg(2), Some(2), Some(3)),
+                Instr::ThreeArg(IROpcode::from(JmpNE), Reg(2), Some(2), Some(3)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(3), Int(3)),
-                Instr::OneArg(IROpcode::Branch, Some(3)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(3)),
             ],
             vec![
                 Instr::NArg(IROpcode::Phi, vec![Reg(4), Reg(2)]),
-                Instr::OneArg(IROpcode::Branch, Some(4)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(4)),
             ],
             vec![Instr::NArg(IROpcode::Phi, vec![Reg(5), Reg(1), Reg(4)])],
         ];
@@ -1772,23 +1822,23 @@ mod tests {
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(0), Nil),
                 Instr::TwoArg(IROpcode::from(MOV), Reg(1), Nil),
-                Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(1), Some(5)),
+                Instr::ThreeArg(IROpcode::from(JmpNE), Reg(0), Some(1), Some(5)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(2)),
-                Instr::ThreeArg(IROpcode::Branch, Reg(2), Some(2), Some(3)),
+                Instr::ThreeArg(IROpcode::from(JmpNE), Reg(2), Some(2), Some(3)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(3), Int(3)),
-                Instr::OneArg(IROpcode::Branch, Some(4)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(4)),
             ],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(4), Int(4)),
-                Instr::OneArg(IROpcode::Branch, Some(4)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(4)),
             ],
             vec![
                 Instr::NArg(IROpcode::Phi, vec![Reg(5), Reg(2)]),
-                Instr::OneArg(IROpcode::Branch, Some(5)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(5)),
             ],
             vec![Instr::NArg(IROpcode::Phi, vec![Reg(6), Reg(1), Reg(5)])],
         ];
@@ -1817,19 +1867,70 @@ mod tests {
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(2)),
                 Instr::TwoArg(IROpcode::from(MOV), Reg(1), Int(1)),
-                Instr::OneArg(IROpcode::Branch, Some(1)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(1)),
             ],
-            vec![Instr::ThreeArg(IROpcode::Branch, Reg(0), Some(2), Some(3))],
+            vec![Instr::ThreeArg(
+                IROpcode::from(JmpNE),
+                Reg(0),
+                Some(2),
+                Some(3),
+            )],
             vec![
                 Instr::TwoArg(IROpcode::from(MOV), Reg(2), Int(1)),
                 Instr::ThreeArg(IROpcode::from(ADD), Reg(3), Reg(1), Reg(2)),
                 Instr::NArg(IROpcode::Phi, vec![Reg(4), Reg(1), Reg(3)]),
-                Instr::OneArg(IROpcode::Branch, Some(1)),
+                Instr::OneArg(IROpcode::from(Jmp), Some(1)),
             ],
             vec![Instr::NArg(IROpcode::Phi, vec![Reg(5), Reg(4)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![1], vec![1]];
         let expected_dominators = vec![vec![], vec![0], vec![1], vec![1]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn or_short_circuit() {
+        let pt = &LuaParseTree::from_str(String::from("local a = 0 or 1")).unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(0)),
+                Instr::ThreeArg(IROpcode::from(JmpEQ), Reg(0), Some(2), Some(1)),
+            ],
+            vec![Instr::TwoArg(IROpcode::from(MOV), Reg(1), Int(1))],
+            vec![Instr::NArg(IROpcode::Phi, vec![Reg(2), Reg(0), Reg(1)])],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![0]];
+        let expected_dominators = vec![vec![], vec![0], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn and_short_circuit() {
+        let pt = &LuaParseTree::from_str(String::from("local a = 0 and 1")).unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(IROpcode::from(MOV), Reg(0), Int(0)),
+                Instr::ThreeArg(IROpcode::from(JmpNE), Reg(0), Some(2), Some(1)),
+            ],
+            vec![Instr::TwoArg(IROpcode::from(MOV), Reg(1), Int(1))],
+            vec![Instr::NArg(IROpcode::Phi, vec![Reg(2), Reg(0), Reg(1)])],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![0]];
+        let expected_dominators = vec![vec![], vec![0], vec![0]];
         check_instrs_and_parents(
             &ir,
             1,

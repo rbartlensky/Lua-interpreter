@@ -50,7 +50,10 @@ impl<'a> LuaIRToLuaBc<'a> {
             self.compile_basic_block(i, bb, &mut instrs);
         }
         for (instr, bb) in &self.branches {
-            if opcode(instrs[*instr]) == Jmp as u8 || opcode(instrs[*instr]) == JmpIf as u8 {
+            if opcode(instrs[*instr]) == Jmp as u8
+                || opcode(instrs[*instr]) == JmpEQ as u8
+                || opcode(instrs[*instr]) == JmpNE as u8
+            {
                 let jmp: i16 = self.blocks[&bb] as i16 - *instr as i16 - 1;
                 set_extended_arg(&mut instrs[*instr], jmp);
             }
@@ -172,14 +175,29 @@ impl<'a> LuaIRToLuaBc<'a> {
                     ));
                 }
             }
-            Branch => {
+            Opcode(Jmp) => {
+                let len = instrs.len();
+                instrs.push(if let Instr::OneArg(_, arg1) = instr {
+                    self.branches.push((len, arg1.get_some()));
+                    make_instr(Jmp, 0, 0, 0)
+                } else {
+                    panic!("Not enough arguments for {:?}!", opcode)
+                })
+            }
+            Opcode(JmpNE) => {
                 let len = instrs.len();
                 instrs.push(if let Instr::ThreeArg(_, arg1, _, arg3) = instr {
                     self.branches.push((len, arg3.get_some()));
-                    make_instr(JmpIf, arg1.get_reg() as u8, 0, 0)
-                } else if let Instr::OneArg(_, arg1) = instr {
-                    self.branches.push((len, arg1.get_some()));
-                    make_instr(Jmp, 0, 0, 0)
+                    make_instr(JmpNE, arg1.get_reg() as u8, 0, 0)
+                } else {
+                    panic!("Not enough arguments for {:?}!", opcode)
+                })
+            }
+            Opcode(JmpEQ) => {
+                let len = instrs.len();
+                instrs.push(if let Instr::ThreeArg(_, arg1, arg2, _) = instr {
+                    self.branches.push((len, arg2.get_some()));
+                    make_instr(JmpEQ, arg1.get_reg() as u8, 0, 0)
                 } else {
                     panic!("Not enough arguments for {:?}!", opcode)
                 })
