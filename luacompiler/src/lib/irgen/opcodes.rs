@@ -2,22 +2,69 @@ use bytecode::instructions::Opcode;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum IROpcode {
-    Opcode(Opcode),
+    MOV,
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    MOD,
+    FDIV,
+    EXP,
+    GetAttr,
+    SetAttr,
+    CLOSURE,
+    CALL,
+    PUSH,
+    VarArg,
+    EQ,
+    MOVR,
+    RET,
+    SetTop,
+    GetUpAttr,
+    SetUpAttr,
+    Jmp,
+    JmpNE,
+    LT,
+    GT,
+    LE,
+    GE,
+    NE,
+    JmpEQ,
     Phi,
 }
 
 impl IROpcode {
-    pub fn opcode(&self) -> Opcode {
-        if let IROpcode::Opcode(o) = self {
-            *o
-        } else {
-            panic!("IROpcode is not an Opcode!")
+    pub fn to_opcode(&self) -> Opcode {
+        match *self {
+            IROpcode::MOV => Opcode::MOV,
+            IROpcode::ADD => Opcode::ADD,
+            IROpcode::SUB => Opcode::SUB,
+            IROpcode::MUL => Opcode::MUL,
+            IROpcode::DIV => Opcode::DIV,
+            IROpcode::MOD => Opcode::MOD,
+            IROpcode::FDIV => Opcode::FDIV,
+            IROpcode::EXP => Opcode::EXP,
+            IROpcode::GetAttr => Opcode::GetAttr,
+            IROpcode::SetAttr => Opcode::SetAttr,
+            IROpcode::CLOSURE => Opcode::CLOSURE,
+            IROpcode::CALL => Opcode::CALL,
+            IROpcode::PUSH => Opcode::PUSH,
+            IROpcode::VarArg => Opcode::VarArg,
+            IROpcode::EQ => Opcode::EQ,
+            IROpcode::MOVR => Opcode::MOVR,
+            IROpcode::RET => Opcode::RET,
+            IROpcode::SetTop => Opcode::SetTop,
+            IROpcode::GetUpAttr => Opcode::GetUpAttr,
+            IROpcode::SetUpAttr => Opcode::SetUpAttr,
+            IROpcode::Jmp => Opcode::Jmp,
+            IROpcode::JmpNE => Opcode::JmpNE,
+            IROpcode::LT => Opcode::LT,
+            IROpcode::GT => Opcode::GT,
+            IROpcode::LE => Opcode::LE,
+            IROpcode::GE => Opcode::GE,
+            IROpcode::NE => Opcode::NE,
+            IROpcode::JmpEQ => Opcode::JmpEQ,
+            _ => panic!("Cannot convert {:?} to opcode!", self),
         }
-    }
-}
-
-impl From<Opcode> for IROpcode {
-    fn from(o: Opcode) -> Self {
-        IROpcode::Opcode(o)
     }
 }

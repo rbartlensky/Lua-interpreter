@@ -1,10 +1,7 @@
 pub mod constants_map;
 
 use self::constants_map::ConstantsMap;
-use bytecode::{
-    instructions::{Opcode::*, *},
-    Function, LuaBytecode,
-};
+use bytecode::{instructions::*, Function, LuaBytecode};
 use irgen::instr::{Arg, Instr};
 use irgen::lua_ir::LuaIR;
 use irgen::opcodes::IROpcode::*;
@@ -50,9 +47,9 @@ impl<'a> LuaIRToLuaBc<'a> {
             self.compile_basic_block(i, bb, &mut instrs);
         }
         for (instr, bb) in &self.branches {
-            if opcode(instrs[*instr]) == Jmp as u8
-                || opcode(instrs[*instr]) == JmpEQ as u8
-                || opcode(instrs[*instr]) == JmpNE as u8
+            if opcode(instrs[*instr]) == Opcode::Jmp as u8
+                || opcode(instrs[*instr]) == Opcode::JmpEQ as u8
+                || opcode(instrs[*instr]) == Opcode::JmpNE as u8
             {
                 let jmp: i16 = self.blocks[&bb] as i16 - *instr as i16 - 1;
                 set_extended_arg(&mut instrs[*instr], jmp);
@@ -75,50 +72,48 @@ impl<'a> LuaIRToLuaBc<'a> {
         let instr = self.ir.functions[f].get_block(bb).get(i);
         let opcode = instr.opcode();
         match opcode {
-            Opcode(MOV) => {
+            MOV => {
                 if let Instr::TwoArg(_, ref arg1, ref arg2) = instr {
                     let (opcode, arg2) = match *arg2 {
-                        Arg::Reg(reg) => (MOV, reg),
-                        Arg::Int(i) => (LDI, self.const_map.get_int(i)),
-                        Arg::Float(f) => (LDF, self.const_map.get_float(f.to_string())),
-                        Arg::Str(ref s) => (LDS, self.const_map.get_str(s.clone())),
-                        _ => (MOV, 0),
+                        Arg::Reg(reg) => (Opcode::MOV, reg),
+                        Arg::Int(i) => (Opcode::LDI, self.const_map.get_int(i)),
+                        Arg::Float(f) => (Opcode::LDF, self.const_map.get_float(f.to_string())),
+                        Arg::Str(ref s) => (Opcode::LDS, self.const_map.get_str(s.clone())),
+                        _ => (Opcode::MOV, 0),
                     };
                     instrs.push(make_instr(opcode, arg1.get_reg() as u8, arg2 as u8, 0))
                 }
             }
-            Opcode(ADD) | Opcode(SUB) | Opcode(MUL) | Opcode(DIV) | Opcode(MOD) | Opcode(FDIV)
-            | Opcode(EXP) | Opcode(EQ) | Opcode(LT) | Opcode(GT) | Opcode(LE) | Opcode(GE)
-            | Opcode(NE) => {
+            ADD | SUB | MUL | DIV | MOD | FDIV | EXP | EQ | LT | GT | LE | GE | NE => {
                 if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
                     instrs.push(make_instr(
-                        opcode.opcode(),
+                        opcode.to_opcode(),
                         arg1.get_reg() as u8,
                         arg2.get_reg() as u8,
                         arg3.get_reg() as u8,
                     ))
                 }
             }
-            Opcode(CLOSURE) => {
+            CLOSURE => {
                 if let Instr::TwoArg(_, arg1, arg2) = instr {
                     instrs.push(make_instr(
-                        opcode.opcode(),
+                        opcode.to_opcode(),
                         arg1.get_reg() as u8,
                         arg2.get_func() as u8,
                         0,
                     ))
                 }
             }
-            Opcode(CALL) | Opcode(SetTop) => {
+            CALL | SetTop => {
                 if let Instr::OneArg(_, arg1) = instr {
-                    instrs.push(make_instr(opcode.opcode(), arg1.get_reg() as u8, 0, 0))
+                    instrs.push(make_instr(opcode.to_opcode(), arg1.get_reg() as u8, 0, 0))
                 }
             }
-            Opcode(PUSH) => instrs.push(if let Instr::OneArg(_, arg1) = instr {
-                make_instr(opcode.opcode(), arg1.get_reg() as u8, 0, 0)
+            PUSH => instrs.push(if let Instr::OneArg(_, arg1) = instr {
+                make_instr(opcode.to_opcode(), arg1.get_reg() as u8, 0, 0)
             } else if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
                 make_instr(
-                    opcode.opcode(),
+                    opcode.to_opcode(),
                     arg1.get_reg() as u8,
                     arg2.get_some() as u8,
                     arg3.get_some() as u8,
@@ -126,78 +121,76 @@ impl<'a> LuaIRToLuaBc<'a> {
             } else {
                 panic!("Not enough arguments for {:?}!", opcode)
             }),
-            Opcode(VarArg) | Opcode(MOVR) => {
-                instrs.push(if let Instr::TwoArg(_, arg1, arg2) = instr {
-                    make_instr(
-                        opcode.opcode(),
-                        arg1.get_reg() as u8,
-                        arg2.get_some() as u8,
-                        0,
-                    )
-                } else if let Instr::OneArg(_, arg1) = instr {
-                    make_instr(opcode.opcode(), 0, 0, arg1.get_some() as u8)
-                } else {
-                    panic!("Not enough arguments for {:?}!", opcode)
-                })
-            }
-            Opcode(RET) => instrs.push(make_instr(opcode.opcode(), 0, 0, 0)),
-            Opcode(GetUpAttr) => {
+            VarArg | MOVR => instrs.push(if let Instr::TwoArg(_, arg1, arg2) = instr {
+                make_instr(
+                    opcode.to_opcode(),
+                    arg1.get_reg() as u8,
+                    arg2.get_some() as u8,
+                    0,
+                )
+            } else if let Instr::OneArg(_, arg1) = instr {
+                make_instr(opcode.to_opcode(), 0, 0, arg1.get_some() as u8)
+            } else {
+                panic!("Not enough arguments for {:?}!", opcode)
+            }),
+            RET => instrs.push(make_instr(opcode.to_opcode(), 0, 0, 0)),
+            GetUpAttr => {
                 if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
                     let reg = arg1.get_reg() as u8;
                     instrs.push(make_instr(
-                        LDS,
+                        Opcode::LDS,
                         reg,
                         self.const_map.get_str(arg3.get_str()) as u8,
                         0,
                     ));
                     instrs.push(make_instr(
-                        opcode.opcode(),
+                        opcode.to_opcode(),
                         reg as u8,
                         arg2.get_some() as u8,
                         reg,
                     ));
                 }
             }
-            Opcode(SetUpAttr) => {
+            SetUpAttr => {
                 if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
                     let reg = arg3.get_reg() as u8;
                     instrs.push(make_instr(
-                        LDS,
+                        Opcode::LDS,
                         last_reg,
                         self.const_map.get_str(arg2.get_str()) as u8,
                         0,
                     ));
                     instrs.push(make_instr(
-                        opcode.opcode(),
+                        opcode.to_opcode(),
                         arg1.get_some() as u8,
                         last_reg,
                         reg,
                     ));
                 }
             }
-            Opcode(Jmp) => {
+            Jmp => {
                 let len = instrs.len();
                 instrs.push(if let Instr::OneArg(_, arg1) = instr {
                     self.branches.push((len, arg1.get_some()));
-                    make_instr(Jmp, 0, 0, 0)
+                    make_instr(opcode.to_opcode(), 0, 0, 0)
                 } else {
                     panic!("Not enough arguments for {:?}!", opcode)
                 })
             }
-            Opcode(JmpNE) => {
+            JmpNE => {
                 let len = instrs.len();
                 instrs.push(if let Instr::ThreeArg(_, arg1, _, arg3) = instr {
                     self.branches.push((len, arg3.get_some()));
-                    make_instr(JmpNE, arg1.get_reg() as u8, 0, 0)
+                    make_instr(opcode.to_opcode(), arg1.get_reg() as u8, 0, 0)
                 } else {
                     panic!("Not enough arguments for {:?}!", opcode)
                 })
             }
-            Opcode(JmpEQ) => {
+            JmpEQ => {
                 let len = instrs.len();
                 instrs.push(if let Instr::ThreeArg(_, arg1, arg2, _) = instr {
                     self.branches.push((len, arg2.get_some()));
-                    make_instr(JmpEQ, arg1.get_reg() as u8, 0, 0)
+                    make_instr(opcode.to_opcode(), arg1.get_reg() as u8, 0, 0)
                 } else {
                     panic!("Not enough arguments for {:?}!", opcode)
                 })
