@@ -537,9 +537,19 @@ impl<'a> LuaToIR<'a> {
             Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
-            } if ridx == lua5_3_y::R_EXP || ridx == lua5_3_y::R_EXP1 => {
+            } if ridx == lua5_3_y::R_EXP => {
                 if nodes.len() > 1 {
-                    self.compile_short_circuit(nodes)
+                    self.compile_or_short_circuit(nodes)
+                } else {
+                    self.compile_expr(&nodes[0])
+                }
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_EXP1 => {
+                if nodes.len() > 1 {
+                    self.compile_and_short_circuit(nodes)
                 } else {
                     self.compile_expr(&nodes[0])
                 }
@@ -616,7 +626,7 @@ impl<'a> LuaToIR<'a> {
         }
     }
 
-    fn compile_short_circuit(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
+    fn compile_or_short_circuit(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
         let left = self.compile_expr(&nodes[0]);
         let parent = self.curr_block;
         let false_branch = self.create_child_block();
@@ -629,14 +639,81 @@ impl<'a> LuaToIR<'a> {
             vec![Arg::Reg(merge_reg), Arg::Reg(left), Arg::Reg(right)],
         ));
         self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
-            if is_term(&nodes[1], lua5_3_l::T_OR) {
-                JmpEQ
-            } else {
-                JmpNE
-            },
+            JmpEQ,
             Arg::Reg(left),
             Arg::Some(merge_branch),
             Arg::Some(false_branch),
+        ));
+        merge_reg
+    }
+
+    fn compile_and_short_circuit(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
+        let left = self.compile_expr(&nodes[0]);
+        let parent = self.curr_block;
+        let false_branch = self.create_child_block();
+        let right = self.compile_expr(&nodes[2]);
+        self.curr_block = parent;
+        let merge_branch = self.create_child_block();
+        let merge_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::NArg(
+            Phi,
+            vec![Arg::Reg(merge_reg), Arg::Reg(left), Arg::Reg(right)],
+        ));
+        self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
+            JmpNE,
+            Arg::Reg(left),
+            Arg::Some(false_branch),
+            Arg::Some(merge_branch),
+        ));
+        merge_reg
+    }
+
+    /// Compile an and short circuit in which the lhs is in <left> and the rhs block
+    /// contains the instructions <right_operand_instrs>.
+    fn compile_and_short_circuit2(
+        &mut self,
+        left: usize,
+        right_operand_instrs: Vec<Instr>,
+    ) -> usize {
+        let parent = self.curr_block;
+        let false_branch = self.create_child_block();
+        self.curr_block().mut_instrs().extend(right_operand_instrs);
+        let right =
+            if let Instr::ThreeArg(_, arg1, _, _) = self.curr_block().instrs().last().unwrap() {
+                arg1.get_reg()
+            } else {
+                panic!("Expected a three argument instruction!")
+            };
+        self.curr_block = parent;
+        let merge_branch = self.create_child_block();
+        let merge_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::NArg(
+            Phi,
+            vec![Arg::Reg(merge_reg), Arg::Reg(left), Arg::Reg(right)],
+        ));
+        self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
+            JmpNE,
+            Arg::Reg(left),
+            Arg::Some(false_branch),
+            Arg::Some(merge_branch),
+        ));
+        merge_reg
+    }
+
+    fn compile_or_short_circuit2(&mut self, left: usize, right: usize, parent: usize) -> usize {
+        let false_branch = self.curr_block;
+        self.curr_block = parent;
+        let merge_branch = self.create_child_block();
+        let merge_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::NArg(
+            Phi,
+            vec![Arg::Reg(merge_reg), Arg::Reg(left), Arg::Reg(right)],
+        ));
+        self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
+            JmpEQ,
+            Arg::Reg(left),
+            Arg::Some(false_branch),
+            Arg::Some(merge_branch),
         ));
         merge_reg
     }
@@ -938,17 +1015,19 @@ impl<'a> LuaToIR<'a> {
         self.curr_block()
             .mut_instrs()
             .push(Instr::OneArg(Jmp, Arg::Some(parent + 1)));
-        let new_block = self.curr_func().create_block_with_parents(vec![parent]);
-        self.get_block(new_block).push_dominator(parent);
-        self.curr_block = new_block;
+        let cond_start = self.curr_func().create_block_with_parents(vec![parent]);
+        self.get_block(cond_start).push_dominator(parent);
+        self.curr_block = cond_start;
         let expr_reg = self.compile_expr(expr);
+        let cond_end = self.curr_block;
         // compile the while loop block
-        self.compile_while_body(new_block, expr_reg, block, vec![], vec![]);
+        self.compile_while_body(cond_start, cond_end, expr_reg, block, vec![], vec![]);
     }
 
     fn compile_while_body(
         &mut self,
-        new_block: usize,
+        while_cond_start: usize,
+        while_cond_end: usize,
         expr_reg: usize,
         block: &'a Node<u8>,
         additional_instrs: Vec<Instr>,
@@ -956,27 +1035,31 @@ impl<'a> LuaToIR<'a> {
     ) {
         let while_block = self.compile_block(block);
         let last_block = self.curr_func().blocks().len();
-        self.get_block(new_block).mut_instrs().push(Instr::ThreeArg(
-            JmpNE,
-            Arg::Reg(expr_reg),
-            Arg::Some(while_block),
-            Arg::Some(last_block),
-        ));
+        self.get_block(while_cond_end)
+            .mut_instrs()
+            .push(Instr::ThreeArg(
+                JmpNE,
+                Arg::Reg(expr_reg),
+                Arg::Some(while_block),
+                Arg::Some(last_block),
+            ));
         self.curr_block = last_block - 1;
-        if !self.curr_block().dominators().contains(&new_block) {
-            self.curr_block().push_dominator(new_block);
+        if !self.curr_block().dominators().contains(&while_cond_end) {
+            self.curr_block().push_dominator(while_cond_end);
         }
         self.instrs().extend(additional_instrs);
         for (reg, name) in reg_map_updates {
             self.curr_block().set_reg_name(reg, name, false);
         }
-        self.generate_phis(new_block);
+        self.generate_phis(while_cond_end);
         self.curr_block()
             .mut_instrs()
-            .push(Instr::OneArg(Jmp, Arg::Some(new_block)));
-        let after_block = self.curr_func().create_block_with_parents(vec![new_block]);
+            .push(Instr::OneArg(Jmp, Arg::Some(while_cond_start)));
+        let after_block = self
+            .curr_func()
+            .create_block_with_parents(vec![while_cond_end]);
         self.curr_block = after_block;
-        self.curr_block().push_dominator(new_block);
+        self.curr_block().push_dominator(while_cond_end);
         self.generate_phis(last_block - 1);
     }
 
@@ -992,6 +1075,7 @@ impl<'a> LuaToIR<'a> {
             .compile_assignment(name, expr, AssignmentType::LocalDecl)
             .get_reg();
         let exprs = self.get_underlying_exprs(exprs);
+        // [end_reg, step_reg]
         let mut regs: Vec<usize> = exprs.iter().map(|e| self.compile_expr(e)).collect();
         if regs.len() > 2 {
             panic!("Too many expression in for-loop.");
@@ -1003,14 +1087,18 @@ impl<'a> LuaToIR<'a> {
             regs.push(new_reg);
         }
         // compile while loop condition
-        let while_condition_index = self.create_child_block();
-        let condition_reg = self.curr_func().get_new_reg();
-        self.instrs().push(Instr::ThreeArg(
-            LE,
-            Arg::Reg(condition_reg),
-            Arg::Reg(start_reg),
-            Arg::Reg(regs[0]),
-        ));
+        let while_condition_start = self.create_child_block();
+        let zero_reg = self.curr_func().get_new_reg();
+        self.instrs()
+            .push(Instr::TwoArg(MOV, Arg::Reg(zero_reg), Arg::Int(0)));
+
+        let left_reg =
+            self.get_operand_of_for_count_condition(zero_reg, start_reg, regs[0], regs[1], true);
+        let parent = self.curr_block;
+        self.create_child_block();
+        let right_reg =
+            self.get_operand_of_for_count_condition(zero_reg, start_reg, regs[0], regs[1], false);
+        let condition_reg = self.compile_or_short_circuit2(left_reg, right_reg, parent);
         let new_reg = self.curr_func().get_new_reg();
         let additional_instrs = vec![Instr::ThreeArg(
             ADD,
@@ -1018,14 +1106,41 @@ impl<'a> LuaToIR<'a> {
             Arg::Reg(start_reg),
             Arg::Reg(regs[1]),
         )];
+        let while_condition_end = self.curr_block;
         let reg_map_updates = vec![(new_reg, name)];
         self.compile_while_body(
-            while_condition_index,
+            while_condition_start,
+            while_condition_end,
             condition_reg,
             block,
             additional_instrs,
             reg_map_updates,
         );
+    }
+
+    fn get_operand_of_for_count_condition(
+        &mut self,
+        zero_reg: usize,
+        start_reg: usize,
+        end_reg: usize,
+        step_reg: usize,
+        is_left: bool,
+    ) -> usize {
+        let zero_cmp_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::ThreeArg(
+            if is_left { GE } else { LT },
+            Arg::Reg(zero_cmp_reg),
+            Arg::Reg(step_reg),
+            Arg::Reg(zero_reg),
+        ));
+        let end_cmp_reg = self.curr_func().get_new_reg();
+        let right_instrs = vec![Instr::ThreeArg(
+            if is_left { LE } else { GE },
+            Arg::Reg(end_cmp_reg),
+            Arg::Reg(start_reg),
+            Arg::Reg(end_reg),
+        )];
+        self.compile_and_short_circuit2(zero_cmp_reg, right_instrs)
     }
 }
 
@@ -1736,7 +1851,7 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(0)),
-                Instr::ThreeArg(JmpNE, Reg(0), Some(2), Some(1)),
+                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
             ],
             vec![Instr::TwoArg(MOV, Reg(1), Int(1))],
             vec![Instr::NArg(Phi, vec![Reg(2), Reg(0), Reg(1)])],
