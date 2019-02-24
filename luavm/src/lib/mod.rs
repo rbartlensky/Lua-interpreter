@@ -9,6 +9,7 @@ extern crate ieee754;
 
 mod errors;
 mod instructions;
+mod lua_std;
 mod lua_values;
 mod stdlib;
 
@@ -18,6 +19,7 @@ use instructions::{
     arithmetic_operators::*, control::*, functions::*, loads::*, relational_operators::*,
     tables::*, upvals::*,
 };
+use lua_std::io::get_io_module;
 use lua_values::{
     lua_closure::{LuaClosure, UserFunction},
     lua_table::CachingTable,
@@ -115,10 +117,15 @@ impl Vm {
 
     fn init_stdlib(bc: &LuaBytecode, env: &mut Gc<LuaVal>) {
         let strings = bc.strings();
+        let rev_strings: HashMap<&str, usize> = strings
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.as_str(), i))
+            .collect();
         for func in STDLIB_FUNCS {
-            if let Some(res) = strings.iter().enumerate().find(|s| s.1 == &func.name()) {
+            if let Some(res) = rev_strings.get(func.name()) {
                 env.set_attr(
-                    LuaVal::from((func.name().to_string(), res.0)),
+                    LuaVal::from((func.name().to_string(), *res)),
                     LuaVal::from(func),
                 )
                 .unwrap();
@@ -127,6 +134,16 @@ impl Vm {
                     .unwrap();
             }
         }
+        let io = get_io_module();
+        env.set_attr(
+            if let Some(i) = rev_strings.get(io.0.as_str()) {
+                LuaVal::from((io.0, *i))
+            } else {
+                LuaVal::from(io.0)
+            },
+            io.1,
+        )
+        .unwrap();
     }
 
     /// Evaluate the program.

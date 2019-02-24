@@ -14,8 +14,8 @@ pub const STDLIB_FUNCS: &'static [StdFunction] = &[
 ];
 
 pub struct StdFunction {
-    name: &'static str,
-    handler: fn(&mut Vm) -> Result<(), LuaError>,
+    pub name: &'static str,
+    pub handler: fn(&mut Vm) -> Result<(), LuaError>,
 }
 
 impl StdFunction {
