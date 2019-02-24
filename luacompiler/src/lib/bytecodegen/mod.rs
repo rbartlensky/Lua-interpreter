@@ -195,9 +195,20 @@ impl<'a> LuaIRToLuaBc<'a> {
                     panic!("Not enough arguments for {:?}!", opcode)
                 })
             }
+            GetAttr | SetAttr => {
+                if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
+                    instrs.push(make_instr(
+                        opcode.to_opcode(),
+                        arg1.get_reg() as u8,
+                        arg2.get_reg() as u8,
+                        arg3.get_reg() as u8,
+                    ))
+                } else {
+                    panic!("GetAttr should be a Instr::ThreeArg instruction!")
+                }
+            }
             // ignore phis as we have already processed them
             Phi => {}
-            _ => panic!("Opcode {:?} cannot be compiled at the moment!", opcode),
         }
     }
 }
