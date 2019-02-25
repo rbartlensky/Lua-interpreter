@@ -13,7 +13,7 @@ fn compile_and_run(file: &str) {
     println!("Compiling {}", file);
     let bc = compile_to_bytecode(compile_to_ir(&pt));
     println!("Interpreting {}", file);
-    let mut vm = Vm::new(bc);
+    let mut vm = Vm::new(bc, vec![]);
     vm.eval().unwrap();
 }
 

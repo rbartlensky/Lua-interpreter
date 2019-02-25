@@ -22,7 +22,7 @@ use instructions::{
 use lua_std::io::get_io_module;
 use lua_values::{
     lua_closure::{LuaClosure, UserFunction},
-    lua_table::CachingTable,
+    lua_table::{CachingTable, UserTable},
     LuaVal,
 };
 use luacompiler::bytecode::{instructions::*, LuaBytecode};
@@ -85,14 +85,23 @@ pub struct Vm {
 
 impl Vm {
     /// Create a new interpreter for the given bytecode.
-    pub fn new(bytecode: LuaBytecode) -> Vm {
+    pub fn new(bytecode: LuaBytecode, script_args: Vec<&str>) -> Vm {
         let mut registers: Vec<LuaVal> = Vec::new();
         registers.resize(REG_NUM, LuaVal::new());
         let mut env = Gc::new(LuaVal::from(CachingTable::new(
             HashMap::new(),
             bytecode.get_strings_len(),
         )));
-        Vm::init_stdlib(&bytecode, &mut env);
+        {
+            let rev_strings: HashMap<&str, usize> = bytecode
+                .strings()
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.as_str(), i))
+                .collect();
+
+            Vm::init_stdlib_and_args(&script_args, &rev_strings, &mut env);
+        }
         let closure = {
             let index = bytecode.get_main_function();
             let main = bytecode.get_function(index);
@@ -115,35 +124,35 @@ impl Vm {
         }
     }
 
-    fn init_stdlib(bc: &LuaBytecode, env: &mut Gc<LuaVal>) {
-        let strings = bc.strings();
-        let rev_strings: HashMap<&str, usize> = strings
-            .iter()
-            .enumerate()
-            .map(|(i, s)| (s.as_str(), i))
-            .collect();
-        for func in STDLIB_FUNCS {
-            if let Some(res) = rev_strings.get(func.name()) {
-                env.set_attr(
-                    LuaVal::from((func.name().to_string(), *res)),
-                    LuaVal::from(func),
-                )
+    fn get_string_lua_val(string: &str, rev_strings: &HashMap<&str, usize>) -> LuaVal {
+        if let Some(i) = rev_strings.get(string) {
+            LuaVal::from((string.to_string(), *i))
+        } else {
+            LuaVal::from(string.to_string())
+        }
+    }
+
+    fn init_stdlib_and_args(
+        script_args: &Vec<&str>,
+        rev_strings: &HashMap<&str, usize>,
+        env: &mut Gc<LuaVal>,
+    ) {
+        let args = LuaVal::from(UserTable::new(HashMap::new()));
+        for (i, sarg) in script_args.iter().enumerate() {
+            args.set_attr(LuaVal::from(i as i64), LuaVal::from(sarg.to_string()))
                 .unwrap();
-            } else {
-                env.set_attr(LuaVal::from(func.name().to_string()), LuaVal::from(func))
-                    .unwrap();
-            }
+        }
+        env.set_attr(Vm::get_string_lua_val("arg", rev_strings), args)
+            .unwrap();
+        for func in STDLIB_FUNCS {
+            env.set_attr(
+                Vm::get_string_lua_val(func.name(), rev_strings),
+                LuaVal::from(func),
+            ).unwrap();
         }
         let io = get_io_module();
-        env.set_attr(
-            if let Some(i) = rev_strings.get(io.0.as_str()) {
-                LuaVal::from((io.0, *i))
-            } else {
-                LuaVal::from(io.0)
-            },
-            io.1,
-        )
-        .unwrap();
+        env.set_attr(Vm::get_string_lua_val(io.0.as_str(), rev_strings), io.1)
+            .unwrap();
     }
 
     /// Evaluate the program.
@@ -183,7 +192,7 @@ mod tests {
         let pt = LuaParseTree::from_str(p).unwrap();
         let ir = compile_to_ir(&pt);
         let bc = compile_to_bytecode(ir);
-        Vm::new(bc)
+        Vm::new(bc, vec![])
     }
 
     #[test]

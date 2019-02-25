@@ -697,6 +697,10 @@ impl<'a> LuaToIR<'a> {
                 }
             }
             Nonterm {
+                ridx: RIdx(ridx),
+                nodes: _,
+            } if ridx == lua5_3_y::R_PREFIXEXP => self.compile_prefix_exp(node),
+            Nonterm {
                 ridx: RIdx(_ridx),
                 ref nodes,
             } => {
