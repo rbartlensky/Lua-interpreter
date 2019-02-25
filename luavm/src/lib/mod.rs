@@ -148,7 +148,8 @@ impl Vm {
             env.set_attr(
                 Vm::get_string_lua_val(func.name(), rev_strings),
                 LuaVal::from(func),
-            ).unwrap();
+            )
+            .unwrap();
         }
         let io = get_io_module();
         env.set_attr(Vm::get_string_lua_val(io.0.as_str(), rev_strings), io.1)

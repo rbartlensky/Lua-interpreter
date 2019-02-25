@@ -86,7 +86,7 @@ impl LuaVal {
         (LuaValKind::BOXED ^ self.val) as *mut Box<LuaObj>
     }
 
-    fn is_number(&self) -> bool {
+    pub fn is_number(&self) -> bool {
         match self.kind() {
             LuaValKind::INT | LuaValKind::FLOAT => true,
             LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_number() },
@@ -94,7 +94,7 @@ impl LuaVal {
         }
     }
 
-    fn is_string(&self) -> bool {
+    pub fn is_string(&self) -> bool {
         match self.kind() {
             LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_string() },
             _ => false,
