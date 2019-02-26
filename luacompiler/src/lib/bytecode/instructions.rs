@@ -147,6 +147,10 @@ pub enum Opcode {
     GE = 28, // R(1) = R(2) >= R(3)
     NE = 29, // R(1) = R(2) != R(3)
     JmpEQ = 30,
+    MovUp = 31,       // R(1).upvals[Arg(2)] = Reg(3)
+    MovUpFromUp = 32, // R(1).upvals[Arg(2)] = curr.upvals[Arg(3)]
+    GetUpVal = 33,    // R(1) = UpVals[Arg(2)]
+    SetUpVal = 34,    // UpVals[Arg(1)] = R(2)
 }
 
 #[cfg(test)]

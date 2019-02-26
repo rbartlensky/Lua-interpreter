@@ -1,6 +1,6 @@
 use super::instr::{Arg, Instr};
 use irgen::opcodes::IROpcode;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub struct BasicBlock<'a> {
     parents: Vec<usize>,
@@ -107,6 +107,9 @@ impl<'a> BasicBlock<'a> {
 
 /// Represents a compiled function in Lua.
 pub struct CompiledFunc<'a> {
+    parent_func: Option<usize>,
+    parent_block: Option<usize>,
+    upvals: BTreeMap<&'a str, usize>,
     reg_count: usize,
     param_count: usize,
     basic_blocks: Vec<BasicBlock<'a>>,
@@ -117,11 +120,48 @@ impl<'a> CompiledFunc<'a> {
     /// Create a new empty function with the given index.
     pub fn new(param_count: usize, is_vararg: bool) -> CompiledFunc<'a> {
         CompiledFunc {
+            parent_func: None,
+            parent_block: None,
+            upvals: BTreeMap::new(),
             reg_count: 0,
             param_count,
             basic_blocks: vec![],
             is_vararg,
         }
+    }
+
+    /// The function in which this was declared.
+    /// Returns `None` if it is the top-level function.
+    pub fn parent_func(&self) -> Option<usize> {
+        self.parent_func
+    }
+
+    /// The block of the parent function in which this was declared.
+    /// Returns `None` if it is the top-level function.
+    pub fn parent_block(&self) -> Option<usize> {
+        self.parent_block
+    }
+
+    /// Set the parent function, in which this was declared.
+    pub fn set_parent_func(&mut self, p: usize) {
+        self.parent_func = Some(p);
+    }
+
+    /// Set the parent block, in which this was declared.
+    pub fn set_parent_block(&mut self, p: usize) {
+        self.parent_block = Some(p);
+    }
+
+    /// The values that this function depends on, i.e. names which are declared
+    /// in parent functions and used in the current function.
+    pub fn upvals(&self) -> &BTreeMap<&'a str, usize> {
+        &self.upvals
+    }
+
+    pub fn push_upval(&mut self, name: &'a str) -> usize {
+        let len = self.upvals.len();
+        self.upvals.insert(name, len);
+        len
     }
 
     pub fn get_new_reg(&mut self) -> usize {

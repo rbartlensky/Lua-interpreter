@@ -107,18 +107,56 @@ impl<'a> LuaToIR<'a> {
     }
 
     fn get_reg(&self, name: &'a str) -> Option<usize> {
-        self.get_reg_from_block(name, self.curr_block)
+        self.get_reg_from_block(name, self.curr_func, self.curr_block)
     }
 
-    fn get_reg_from_block(&self, name: &'a str, bb: usize) -> Option<usize> {
-        let curr_func = &self.functions[self.curr_func];
+    fn get_upval(&mut self, name: &'a str) -> Option<usize> {
+        // does the current function define the upvalue already?
+        if let Some(&upval_idx) = self.curr_func().upvals().get(name) {
+            return Some(upval_idx);
+        }
+        let mut func = self.curr_func().parent_func();
+        let mut block = self.curr_func().parent_block();
+        // go through all the parents, and check if we can find <name>
+        while func.is_some() {
+            // found <name>, so we can create a new upvalue, and load it
+            if let Some(_) = self.get_reg_from_block(name, func.unwrap(), block.unwrap()) {
+                return Some(self.curr_func().push_upval(name));
+            } else {
+                let p_func = &self.functions[func.unwrap()];
+                block = p_func.parent_block();
+                func = p_func.parent_func();
+            }
+        }
+        None
+    }
+
+    fn set_upval(&mut self, name: &'a str, value: usize) {
+        if let Some(upval_idx) = self.get_upval(name) {
+            self.instrs().push(Instr::TwoArg(
+                SetUpVal,
+                Arg::Some(upval_idx + 1),
+                Arg::Reg(value),
+            ));
+        } else {
+            self.instrs().push(Instr::ThreeArg(
+                SetUpAttr,
+                Arg::Some(0),
+                Arg::Str(name.to_string()),
+                Arg::Reg(value),
+            ));
+        }
+    }
+
+    fn get_reg_from_block(&self, name: &'a str, func: usize, bb: usize) -> Option<usize> {
+        let curr_func = &self.functions[func];
         let curr_block = curr_func.get_block(bb);
         let res = curr_block.get_reg(name);
         if res.is_some() {
             return res;
         }
         for &d in curr_block.dominators() {
-            let res = self.get_reg_from_block(name, d);
+            let res = self.get_reg_from_block(name, func, d);
             if res.is_some() {
                 return res;
             }
@@ -435,12 +473,7 @@ impl<'a> LuaToIR<'a> {
         for (var, reg) in postponed_instrs {
             match var {
                 VarType::Name(name) => {
-                    self.instrs().push(Instr::ThreeArg(
-                        SetUpAttr,
-                        Arg::Some(0),
-                        Arg::Str(name.to_string()),
-                        Arg::Reg(reg),
-                    ));
+                    self.set_upval(name, reg);
                 }
                 VarType::Dict(from, attr) => {
                     self.instrs().push(Instr::ThreeArg(
@@ -470,6 +503,31 @@ impl<'a> LuaToIR<'a> {
         }
     }
 
+    fn find_name(&mut self, name: &'a str) -> usize {
+        match self.get_reg(name) {
+            Some(reg) => reg,
+            // check to see if any parent functions or blocks contain this variable
+            None => {
+                let reg = self.curr_func().get_new_reg();
+                if let Some(upval_idx) = self.get_upval(name) {
+                    self.instrs().push(Instr::TwoArg(
+                        GetUpVal,
+                        Arg::Reg(reg),
+                        Arg::Some(upval_idx + 1),
+                    ))
+                } else {
+                    self.instrs().push(Instr::ThreeArg(
+                        GetUpAttr,
+                        Arg::Reg(reg),
+                        Arg::Some(0),
+                        Arg::Str(name.to_string()),
+                    ));
+                }
+                reg
+            }
+        }
+    }
+
     fn compile_prefix_exp(&mut self, node: &'a Node<u8>) -> usize {
         match *node {
             Nonterm {
@@ -483,22 +541,7 @@ impl<'a> LuaToIR<'a> {
                 } else {
                     let var = self.compile_var_or_name(&nodes[0]);
                     match var {
-                        VarType::Name(name) => {
-                            let reg = self.get_reg(name);
-                            match reg {
-                                Some(reg) => reg,
-                                _ => {
-                                    let reg = self.curr_func().get_new_reg();
-                                    self.instrs().push(Instr::ThreeArg(
-                                        GetUpAttr,
-                                        Arg::Reg(reg),
-                                        Arg::Some(0),
-                                        Arg::Str(name.to_string()),
-                                    ));
-                                    reg
-                                }
-                            }
-                        }
+                        VarType::Name(name) => self.find_name(name),
                         VarType::Dict(from, attr) => {
                             let reg = self.curr_func().get_new_reg();
                             self.instrs().push(Instr::ThreeArg(
@@ -576,12 +619,7 @@ impl<'a> LuaToIR<'a> {
                     ResultType::Local(value)
                 } else {
                     if action != AssignmentType::Postponed {
-                        self.instrs().push(Instr::ThreeArg(
-                            SetUpAttr,
-                            Arg::Some(0),
-                            Arg::Str(name.to_string()),
-                            Arg::Reg(value),
-                        ));
+                        self.set_upval(name, value);
                     }
                     ResultType::Global(value)
                 }
@@ -640,32 +678,7 @@ impl<'a> LuaToIR<'a> {
             Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
-            } if ridx == lua5_3_y::R_FUNCBODY => {
-                let old_curr_func = self.curr_func;
-                // create a new `CompiledFunc` for this function
-                let new_func_id = self.functions.len();
-                let param_nodes = get_nodes(&nodes[1], lua5_3_y::R_PARLIST);
-                let mut param_count = param_nodes.len();
-                let is_vararg =
-                    param_count > 0 && is_term(param_nodes.last().unwrap(), lua5_3_l::T_DOTDOTDOT);
-                let new_func = CompiledFunc::new(0, is_vararg);
-                self.functions.push(new_func);
-                self.curr_func = new_func_id;
-                let new_basic_block = self.curr_func().create_block();
-                // make the first N registers point to the first N parameters
-                self.compile_param_list(&nodes[1]);
-                self.compile_block_in_basic_block(&nodes[3], new_basic_block);
-                // restore the old state so that we can create a closure instruction
-                // in the outer function
-                self.curr_func = old_curr_func;
-                let reg = self.curr_func().get_new_reg();
-                self.instrs().push(Instr::TwoArg(
-                    CLOSURE,
-                    Arg::Reg(reg),
-                    Arg::Func(new_func_id),
-                ));
-                reg
-            }
+            } if ridx == lua5_3_y::R_FUNCBODY => self.compile_funcbody(nodes),
             Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
@@ -741,19 +754,7 @@ impl<'a> LuaToIR<'a> {
                         ));
                         new_reg
                     }
-                    lua5_3_l::T_NAME => match self.get_reg(value) {
-                        Some(reg) => reg,
-                        None => {
-                            let reg = self.curr_func().get_new_reg();
-                            self.instrs().push(Instr::ThreeArg(
-                                GetUpAttr,
-                                Arg::Reg(reg),
-                                Arg::Some(0),
-                                Arg::Str(value.to_string()),
-                            ));
-                            reg
-                        }
-                    },
+                    lua5_3_l::T_NAME => self.find_name(value),
                     lua5_3_l::T_DOTDOTDOT => {
                         if self.curr_func().is_vararg() {
                             let reg = self.curr_func().get_new_reg();
@@ -770,6 +771,80 @@ impl<'a> LuaToIR<'a> {
                 }
             }
         }
+    }
+
+    fn compile_funcbody(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
+        let old_curr_func = self.curr_func;
+        // create a new `CompiledFunc` for this function
+        let new_func_id = self.functions.len();
+        let param_nodes = get_nodes(&nodes[1], lua5_3_y::R_PARLIST);
+        let param_count = param_nodes.len();
+        let is_vararg =
+            param_count > 0 && is_term(param_nodes.last().unwrap(), lua5_3_l::T_DOTDOTDOT);
+        let mut new_func = CompiledFunc::new(0, is_vararg);
+        new_func.set_parent_func(self.curr_func);
+        new_func.set_parent_block(self.curr_block);
+        self.functions.push(new_func);
+        self.curr_func = new_func_id;
+        let new_basic_block = self.curr_func().create_block();
+        // make the first N registers point to the first N parameters
+        self.compile_param_list(&nodes[1]);
+        self.compile_block_in_basic_block(&nodes[3], new_basic_block);
+        // restore the old state so that we can create a closure instruction
+        // in the outer function
+        self.curr_func = old_curr_func;
+        let reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::TwoArg(
+            CLOSURE,
+            Arg::Reg(reg),
+            Arg::Func(new_func_id),
+        ));
+        // declare, update and move upvalues based on what the child function depends on
+        let (instrs, curr_func_upvals) = {
+            let mut curr_func_upvals_count = self.curr_func().upvals().len();
+            let new_func = &self.functions[new_func_id];
+            let mut instrs = Vec::with_capacity(new_func.upvals().len());
+            let mut curr_func_upvals = vec![];
+            // move the upvalues into the new function
+            for (name, location) in new_func.upvals() {
+                // does the child function have a dependency on any of the current local
+                // variables?
+                if let Some(local_reg) = self.get_reg(name) {
+                    instrs.push(Instr::ThreeArg(
+                        MovUp,
+                        Arg::Reg(reg),
+                        Arg::Some(*location + 1),
+                        Arg::Reg(local_reg),
+                    ))
+                } else {
+                    // the child has a dependency on either:
+                    // i)  an already created upvalue of the current function
+                    // ii) a local in some outer function, which has not been
+                    // declared as an upvalue
+                    let upval_idx = if let Some(upval_idx) =
+                        self.functions[self.curr_func].upvals().get(name)
+                    {
+                        *upval_idx + 1
+                    } else {
+                        curr_func_upvals.push(*name);
+                        curr_func_upvals_count += 1;
+                        curr_func_upvals_count
+                    };
+                    instrs.push(Instr::ThreeArg(
+                        MovUpFromUp,
+                        Arg::Reg(reg),
+                        Arg::Some(*location + 1),
+                        Arg::Some(upval_idx),
+                    ));
+                }
+            }
+            (instrs, curr_func_upvals)
+        };
+        self.instrs().extend(instrs);
+        for name in curr_func_upvals {
+            self.curr_func().push_upval(name);
+        }
+        reg
     }
 
     fn compile_or_short_circuit(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
@@ -1120,7 +1195,7 @@ impl<'a> LuaToIR<'a> {
         }
         for (name, mut args) in phis {
             args.insert(
-                self.get_reg_from_block(name, main_block)
+                self.get_reg_from_block(name, self.curr_func, main_block)
                     .expect("Non-local found in branch, but not in parent blocks!"),
             );
             let mut args: Vec<Arg> = args.iter().map(|v| Arg::Reg(*v)).collect();
@@ -2050,5 +2125,73 @@ mod tests {
             &expected_parents,
             &expected_dominators,
         );
+    }
+
+    #[test]
+    fn upvals() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a = 2
+             function f()
+               a = 3
+               x = 2
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(2)),
+                Instr::TwoArg(CLOSURE, Reg(1), Func(1)),
+                Instr::ThreeArg(MovUp, Reg(1), Some(1), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(1)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(3)),
+                Instr::TwoArg(SetUpVal, Some(1), Reg(0)),
+                Instr::TwoArg(MOV, Reg(1), Int(2)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(1)),
+            ],
+        ];
+        for (i, f) in ir.functions.iter().enumerate() {
+            check_eq(f.get_block(0).instrs(), &expected_instrs[i])
+        }
+    }
+
+    #[test]
+    fn upvals2() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a = 2
+             function f()
+               local b = 3
+               function g()
+                 local c = a + b
+               end
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(2)),
+                Instr::TwoArg(CLOSURE, Reg(1), Func(1)),
+                Instr::ThreeArg(MovUp, Reg(1), Some(1), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(1)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(3)),
+                Instr::TwoArg(CLOSURE, Reg(1), Func(2)),
+                Instr::ThreeArg(MovUpFromUp, Reg(1), Some(1), Some(1)),
+                Instr::ThreeArg(MovUp, Reg(1), Some(2), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("g".to_string()), Reg(1)),
+            ],
+            vec![
+                Instr::TwoArg(GetUpVal, Reg(0), Some(1)),
+                Instr::TwoArg(GetUpVal, Reg(1), Some(2)),
+                Instr::ThreeArg(ADD, Reg(2), Reg(0), Reg(1)),
+            ],
+        ];
+        for (i, f) in ir.functions.iter().enumerate() {
+            check_eq(f.get_block(0).instrs(), &expected_instrs[i])
+        }
     }
 }

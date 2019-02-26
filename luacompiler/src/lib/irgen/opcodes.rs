@@ -30,6 +30,10 @@ pub enum IROpcode {
     GE,
     NE,
     JmpEQ,
+    MovUp,
+    MovUpFromUp,
+    GetUpVal,
+    SetUpVal,
     Phi,
 }
 
@@ -64,6 +68,10 @@ impl IROpcode {
             IROpcode::GE => Opcode::GE,
             IROpcode::NE => Opcode::NE,
             IROpcode::JmpEQ => Opcode::JmpEQ,
+            IROpcode::MovUp => Opcode::MovUp,
+            IROpcode::MovUpFromUp => Opcode::MovUpFromUp,
+            IROpcode::GetUpVal => Opcode::GetUpVal,
+            IROpcode::SetUpVal => Opcode::SetUpVal,
             _ => panic!("Cannot convert {:?} to opcode!", self),
         }
     }

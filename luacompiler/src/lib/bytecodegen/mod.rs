@@ -207,6 +207,54 @@ impl<'a> LuaIRToLuaBc<'a> {
                     panic!("GetAttr should be a Instr::ThreeArg instruction!")
                 }
             }
+            MovUp => {
+                if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
+                    instrs.push(make_instr(
+                        opcode.to_opcode(),
+                        arg1.get_reg() as u8,
+                        arg2.get_some() as u8,
+                        arg3.get_reg() as u8,
+                    ))
+                } else {
+                    panic!("MovUp should be a Instr::ThreeArg instruction!")
+                }
+            }
+            MovUpFromUp => {
+                if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
+                    instrs.push(make_instr(
+                        opcode.to_opcode(),
+                        arg1.get_reg() as u8,
+                        arg2.get_some() as u8,
+                        arg3.get_some() as u8,
+                    ))
+                } else {
+                    panic!("MovUpFromUp should be a Instr::ThreeArg instruction!")
+                }
+            }
+            GetUpVal => {
+                if let Instr::TwoArg(_, arg1, arg2) = instr {
+                    instrs.push(make_instr(
+                        opcode.to_opcode(),
+                        arg1.get_reg() as u8,
+                        arg2.get_some() as u8,
+                        0,
+                    ))
+                } else {
+                    panic!("GetUpVal should be a Instr::TwoArg instruction!")
+                }
+            }
+            SetUpVal => {
+                if let Instr::TwoArg(_, arg1, arg2) = instr {
+                    instrs.push(make_instr(
+                        opcode.to_opcode(),
+                        arg1.get_some() as u8,
+                        arg2.get_reg() as u8,
+                        0,
+                    ))
+                } else {
+                    panic!("SetUpVal should be a Instr::TwoArg instruction!")
+                }
+            }
             // ignore phis as we have already processed them
             Phi => {}
         }
