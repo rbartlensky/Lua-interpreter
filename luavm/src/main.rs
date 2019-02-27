@@ -20,11 +20,14 @@ fn main() {
             Arg::with_name("INPUT")
                 .help("File to interpret")
                 .required(true)
-                .index(1),
+                .index(1)
+                .min_values(1)
+                .max_values(u64::max_value()),
         )
         .get_matches();
     // we can safely unwrap because INPUT is not an optional argument
-    let file = matches.value_of("INPUT").unwrap();
+    let mut script_args = matches.values_of("INPUT").unwrap();
+    let file = script_args.nth(0).unwrap();
     let parse_tree = LuaParseTree::new(&file);
     match parse_tree {
         Ok(pt) => {
@@ -32,7 +35,10 @@ fn main() {
             if matches.is_present("bytecode") {
                 println!("{}", &bc);
             }
-            let mut vm = Vm::new(bc);
+            let mut all_args: Vec<&str> = vec![file];
+            let script_args: Vec<&str> = script_args.map(|v| v).collect();
+            all_args.extend(script_args);
+            let mut vm = Vm::new(bc, all_args);
             vm.eval().unwrap();
         }
         Err(err) => println!("{:#?}", err),

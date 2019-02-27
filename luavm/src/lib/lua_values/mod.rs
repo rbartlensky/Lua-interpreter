@@ -3,12 +3,20 @@ mod lua_obj;
 pub mod lua_table;
 mod tagging;
 
-use self::{lua_closure::*, lua_obj::*, lua_table::LuaTable, tagging::*};
+use self::{
+    lua_closure::*,
+    lua_obj::*,
+    lua_table::{CachingTable, UserTable},
+    tagging::*,
+};
 use crate::stdlib::StdFunction;
 use errors::LuaError;
 use gc::{Finalize, Gc, Trace};
+use ieee754::Ieee754;
+use lua_values::lua_table::LuaTable;
 use luacompiler::bytecode::Function;
 use std::{
+    cmp::Ordering,
     fmt,
     fmt::{Display, Formatter},
     hash::{Hash, Hasher},
@@ -23,14 +31,43 @@ pub struct LuaVal {
 
 impl Finalize for LuaVal {}
 unsafe impl Trace for LuaVal {
-    custom_trace!(this, {
-        // only tables and closures have a Gc inside, so there is no need to mark anything else
-        match this.kind() {
-            LuaValKind::TABLE => mark(unsafe { &*table_ptr(this.val) }),
-            LuaValKind::CLOSURE => mark(unsafe { &*closure_ptr(this.val) }),
+    unsafe fn trace(&self) {
+        match self.kind() {
+            LuaValKind::TABLE => (*table_ptr(self.val)).trace(),
+            LuaValKind::CLOSURE => (*closure_ptr(self.val)).trace(),
             _ => {}
         }
-    });
+    }
+
+    unsafe fn root(&self) {
+        match self.kind() {
+            LuaValKind::TABLE => (*table_ptr(self.val)).root(),
+            LuaValKind::CLOSURE => (*closure_ptr(self.val)).root(),
+            _ => {}
+        }
+    }
+
+    unsafe fn unroot(&self) {
+        match self.kind() {
+            LuaValKind::TABLE => (*table_ptr(self.val)).unroot(),
+            LuaValKind::CLOSURE => (*closure_ptr(self.val)).unroot(),
+            _ => {}
+        }
+    }
+
+    fn finalize_glue(&self) {
+        match self.kind() {
+            LuaValKind::TABLE => unsafe {
+                (*table_ptr(self.val)).finalize();
+                (*table_ptr(self.val)).finalize_glue();
+            },
+            LuaValKind::CLOSURE => unsafe {
+                (*closure_ptr(self.val)).finalize();
+                (*closure_ptr(self.val)).finalize_glue();
+            },
+            _ => {}
+        }
+    }
 }
 
 impl LuaVal {
@@ -49,7 +86,7 @@ impl LuaVal {
         (LuaValKind::BOXED ^ self.val) as *mut Box<LuaObj>
     }
 
-    fn is_number(&self) -> bool {
+    pub fn is_number(&self) -> bool {
         match self.kind() {
             LuaValKind::INT | LuaValKind::FLOAT => true,
             LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_number() },
@@ -57,7 +94,7 @@ impl LuaVal {
         }
     }
 
-    fn is_string(&self) -> bool {
+    pub fn is_string(&self) -> bool {
         match self.kind() {
             LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_string() },
             _ => false,
@@ -138,7 +175,7 @@ impl LuaVal {
     }
 
     /// Sets the given attribute to a given value.
-    pub fn set_attr(&mut self, attr: LuaVal, val: LuaVal) -> Result<(), LuaError> {
+    pub fn set_attr(&self, attr: LuaVal, val: LuaVal) -> Result<(), LuaError> {
         if let LuaValKind::TABLE = self.kind() {
             Ok(unsafe {
                 (*table_ptr(self.val)).set_attr(attr, val);
@@ -319,15 +356,6 @@ impl From<(String, usize)> for LuaVal {
     }
 }
 
-impl From<LuaTable> for LuaVal {
-    /// Create a table LuaVal.
-    fn from(table: LuaTable) -> Self {
-        LuaVal {
-            val: LuaValKind::TABLE ^ to_raw_ptr(Gc::new(table)),
-        }
-    }
-}
-
 impl From<&StdFunction> for LuaVal {
     /// Create a closure LuaVal
     fn from(func: &StdFunction) -> Self {
@@ -349,8 +377,9 @@ impl From<&Function> for LuaVal {
 impl From<UserFunction> for LuaVal {
     /// Create a closure LuaVal
     fn from(func: UserFunction) -> Self {
+        let user_func: Box<LuaClosure> = Box::new(func);
         LuaVal {
-            val: LuaValKind::CLOSURE ^ to_raw_ptr(Gc::new(Box::new(func))),
+            val: LuaValKind::CLOSURE ^ to_raw_ptr(Gc::new(user_func)),
         }
     }
 }
@@ -360,6 +389,26 @@ impl From<bool> for LuaVal {
     fn from(b: bool) -> Self {
         LuaVal {
             val: LuaValKind::BOOL ^ ((b as usize) << tagging::TAG_SHIFT),
+        }
+    }
+}
+
+impl From<UserTable> for LuaVal {
+    /// Create a table LuaVal.
+    fn from(table: UserTable) -> Self {
+        let lua_table: Box<LuaTable> = Box::new(table);
+        LuaVal {
+            val: LuaValKind::TABLE ^ to_raw_ptr(Gc::new(lua_table)),
+        }
+    }
+}
+
+impl From<CachingTable> for LuaVal {
+    /// Create a table LuaVal.
+    fn from(table: CachingTable) -> Self {
+        let lua_table: Box<LuaTable> = Box::new(table);
+        LuaVal {
+            val: LuaValKind::TABLE ^ to_raw_ptr(Gc::new(lua_table)),
         }
     }
 }
@@ -412,6 +461,26 @@ impl Display for LuaVal {
                 (*closure_ptr(self.val)).addr()
             }),
             _ => write!(f, "{}", self.to_string().unwrap()),
+        }
+    }
+}
+
+impl PartialOrd for LuaVal {
+    fn partial_cmp(&self, other: &LuaVal) -> Option<Ordering> {
+        if self.is_number() && other.is_number() {
+            Some(
+                self.to_float()
+                    .unwrap()
+                    .total_cmp(&other.to_float().unwrap()),
+            )
+        } else if self.is_string() && other.is_string() {
+            Some(
+                self.get_string_ref()
+                    .unwrap()
+                    .cmp(other.get_string_ref().unwrap()),
+            )
+        } else {
+            None
         }
     }
 }
@@ -518,7 +587,7 @@ mod tests {
     fn table_type() {
         let mut hm = HashMap::new();
         hm.insert(LuaVal::from(String::from("bar")), LuaVal::from(2));
-        let mut main = LuaVal::from(LuaTable::new(hm));
+        let main = LuaVal::from(UserTable::new(hm));
         assert_eq!(main.kind(), LuaValKind::TABLE);
         assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
@@ -544,7 +613,7 @@ mod tests {
 
     #[test]
     fn closure_type() {
-        let mut main = LuaVal::from(UserFunction::new(0, 0, 0));
+        let mut main = LuaVal::from(UserFunction::new(0, 0, 0, vec![]));
         assert_eq!(main.kind(), LuaValKind::CLOSURE);
         assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
@@ -573,9 +642,9 @@ mod tests {
             LuaVal::new(),
             LuaVal::from(1),
             LuaVal::from(3.0),
-            LuaVal::from(LuaTable::new(HashMap::new())),
+            LuaVal::from(UserTable::new(HashMap::new())),
             LuaVal::from(String::from("3.0")),
-            LuaVal::from(UserFunction::new(0, 0, 0)),
+            LuaVal::from(UserFunction::new(0, 0, 0, vec![])),
             LuaVal::from(false),
         ]
     }
@@ -923,10 +992,10 @@ mod tests {
         let mut hm2 = HashMap::new();
         hm2.insert(LuaVal::from(String::from("bar")), LuaVal::from(2.0));
         // table1 {foo: 1}
-        let table1 = LuaVal::from(LuaTable::new(hm1));
+        let table1 = LuaVal::from(UserTable::new(hm1));
         hm2.insert(LuaVal::from(String::from("foo")), table1);
         // table2 { foo: { foo: 1 }, bar: 2.0 }
-        let mut table2 = LuaVal::from(LuaTable::new(hm2));
+        let table2 = LuaVal::from(UserTable::new(hm2));
         // table3 { foo: { foo: 1 }, bar: 2.0 }, table 3 is a reference to the same dict
         let table3 = table2.clone();
         // table2 { foo: { foo: 1 }, bar: 2 }
@@ -965,8 +1034,8 @@ mod tests {
             LuaVal::from(1),
             LuaVal::from(1.0),
             LuaVal::from(String::from("1.0")),
-            LuaVal::from(LuaTable::new(HashMap::new())),
-            LuaVal::from(UserFunction::new(0, 0, 0)),
+            LuaVal::from(UserTable::new(HashMap::new())),
+            LuaVal::from(UserFunction::new(0, 0, 0, vec![])),
         ]
     }
 
@@ -1003,7 +1072,7 @@ mod tests {
     #[test]
     fn eq_for_tables() {
         let types = get_eq_types();
-        let table = LuaVal::from(LuaTable::new(HashMap::new()));
+        let table = LuaVal::from(UserTable::new(HashMap::new()));
         assert_eq!(table, table);
         for i in 0..5 {
             assert_ne!(table, types[i]);

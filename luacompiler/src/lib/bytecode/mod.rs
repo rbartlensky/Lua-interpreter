@@ -2,7 +2,7 @@ pub mod instructions;
 
 use self::instructions::format_instr;
 use bincode::{deserialize, serialize};
-use irgen::{compiled_func::CompiledFunc, constants_map::ConstantsMap};
+use bytecodegen::constants_map::ConstantsMap;
 use std::{
     fmt,
     fs::File,
@@ -16,31 +16,31 @@ pub struct Function {
     index: usize,
     reg_count: usize,
     param_count: usize,
-    // Indecies of all the functions that are the children of this function.
-    functions: Vec<usize>,
     instrs: Vec<u32>,
 }
 
 impl Function {
+    pub fn new(index: usize, reg_count: usize, param_count: usize, instrs: Vec<u32>) -> Function {
+        Function {
+            index,
+            reg_count,
+            param_count,
+            instrs,
+        }
+    }
+
     /// Create a function which holds the given instructions.
     pub fn from_u32_instrs(instrs: Vec<u32>) -> Function {
         Function {
             index: 0,
-            functions: vec![],
             reg_count: 0,
             param_count: 0,
             instrs,
         }
     }
 
-    /// Get the index in the bytecode of this Function.
     pub fn index(&self) -> usize {
         self.index
-    }
-
-    /// Get the id of the i-th child.
-    pub fn get_func_index(&self, i: usize) -> usize {
-        self.functions[i]
     }
 
     pub fn instrs_len(&self) -> usize {
@@ -58,21 +58,6 @@ impl Function {
 
     pub fn param_count(&self) -> usize {
         self.param_count
-    }
-}
-
-impl<'a> From<CompiledFunc<'a>> for Function {
-    fn from(func: CompiledFunc) -> Function {
-        let mut new_function = Function {
-            index: func.index(),
-            reg_count: func.reg_map().reg_count(),
-            param_count: func.param_count(),
-            functions: vec![],
-            instrs: vec![],
-        };
-        new_function.instrs = func.instrs().iter().map(|i| i.as_32bit()).collect();
-        new_function.functions = func.extract_functions();
-        new_function
     }
 }
 
@@ -154,8 +139,8 @@ impl LuaBytecode {
 
 impl fmt::Display for LuaBytecode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for function in &self.functions {
-            write!(f, "Function {} {{\n", function.index())?;
+        for (i, function) in self.functions.iter().enumerate() {
+            write!(f, "Function {} {{\n", i)?;
             for instr in &function.instrs {
                 write!(f, "  {}\n", format_instr(*instr))?;
             }

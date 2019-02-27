@@ -1,28 +1,61 @@
 const MASK: u32 = 0x000000FF;
+const EXTENDED_MASK: u32 = 0x0000FFFF;
 
 /// Get the opcode of an instruction
-pub fn opcode(instr: u32) -> u8 {
+#[inline]
+pub const fn opcode(instr: u32) -> u8 {
     (instr & MASK) as u8
 }
 
 /// Get the first argument of an instruction.
-pub fn first_arg(instr: u32) -> u8 {
+#[inline]
+pub const fn first_arg(instr: u32) -> u8 {
     ((instr >> 8) & MASK) as u8
 }
 
+#[inline]
+pub fn set_first_arg(instr: &mut u32, v: u8) {
+    *instr |= (v as u32) << 8;
+}
+
 /// Get the second argument of an instruction.
-pub fn second_arg(instr: u32) -> u8 {
+#[inline]
+pub const fn second_arg(instr: u32) -> u8 {
     ((instr >> 16) & MASK) as u8
 }
 
+#[inline]
+pub fn set_second_arg(instr: &mut u32, v: u8) {
+    *instr |= (v as u32) << 16;
+}
+
 /// Get the third argument of an instruction.
-pub fn third_arg(instr: u32) -> u8 {
+#[inline]
+pub const fn third_arg(instr: u32) -> u8 {
     ((instr >> 24) & MASK) as u8
 }
 
+/// Get the second argument of an instruction.
+#[inline]
+pub const fn extended_arg(instr: u32) -> i16 {
+    ((instr >> 16) & EXTENDED_MASK) as i16
+}
+
+#[inline]
+pub fn set_extended_arg(instr: &mut u32, v: i16) {
+    *instr |= (v as u32) << 16;
+}
+
 /// Create an instruction with the given opcode and arguments.
+#[inline]
 pub const fn make_instr(opcode: Opcode, arg1: u8, arg2: u8, arg3: u8) -> u32 {
     opcode as u32 + ((arg1 as u32) << 8) + ((arg2 as u32) << 16) + ((arg3 as u32) << 24)
+}
+
+/// Create an instruction with the given opcode and arguments.
+#[inline]
+pub const fn make_extended_instr(opcode: Opcode, arg1: u8, arg2: i16) -> u32 {
+    opcode as u32 + ((arg1 as u32) << 8) + ((arg2 as u32) << 16)
 }
 
 pub fn format_instr(instr: u32) -> String {
@@ -48,6 +81,16 @@ pub fn format_instr(instr: u32) -> String {
         18 => "MovR",
         19 => "Ret",
         20 => "SetTop",
+        21 => "GetUpAttr",
+        22 => "SetUpAttr",
+        23 => "Jmp",
+        24 => "JmpNE",
+        25 => "LT",
+        26 => "GT",
+        27 => "LE",
+        28 => "GE",
+        29 => "NE",
+        30 => "JmpEQ",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(
@@ -57,21 +100,6 @@ pub fn format_instr(instr: u32) -> String {
         second_arg(instr),
         third_arg(instr)
     )
-}
-
-/// Represents a high level instruction whose operands have a size of usize.
-/// This is used by the frontend to create an SSA IR, which later gets translated
-/// into smaller instructions that fit in 32 bits.
-#[derive(PartialEq, Eq, Debug, Clone, Copy)]
-pub struct HLInstr(pub Opcode, pub usize, pub usize, pub usize);
-
-impl HLInstr {
-    pub fn as_32bit(&self) -> u32 {
-        if self.1 > 255 || self.2 > 255 || self.3 > 255 {
-            panic!("Value is truncated!");
-        }
-        make_instr(self.0, self.1 as u8, self.2 as u8, self.3 as u8)
-    }
 }
 
 /// Represents the supported operations of the bytecode.
@@ -107,8 +135,22 @@ pub enum Opcode {
     EQ = 17, // R(1) == R(2)
     // Copy return value RV(2) into R(1); Arg(3) = 1 or 2 => same reasoning as above
     MOVR = 18,
-    RET = 19,    // return to the parent frame
-    SetTop = 20, // set R(1)'s `args_start` to the top of the stack
+    RET = 19,       // return to the parent frame
+    SetTop = 20,    // set R(1)'s `args_start` to the top of the stack
+    GetUpAttr = 21, // R(1) = Upvals[Arg(2)][Arg(3)]
+    SetUpAttr = 22, // Upvals[Arg(1)][Arg(2)] = R(3)
+    Jmp = 23,
+    JmpNE = 24,
+    LT = 25, // R(1) = R(2) < R(3)
+    GT = 26, // R(1) = R(2) > R(3)
+    LE = 27, // R(1) = R(2) <= R(3)
+    GE = 28, // R(1) = R(2) >= R(3)
+    NE = 29, // R(1) = R(2) != R(3)
+    JmpEQ = 30,
+    MovUp = 31,       // R(1).upvals[Arg(2)] = Reg(3)
+    MovUpFromUp = 32, // R(1).upvals[Arg(2)] = curr.upvals[Arg(3)]
+    GetUpVal = 33,    // R(1) = UpVals[Arg(2)]
+    SetUpVal = 34,    // UpVals[Arg(1)] = R(2)
 }
 
 #[cfg(test)]

@@ -1,19 +1,19 @@
 pub mod compiled_func;
-pub mod constants_map;
+pub mod instr;
 pub mod lua_ir;
-pub mod register_map;
+pub mod opcodes;
 mod utils;
 
-use self::utils::{find_term, get_nodes, is_term};
-use self::{
-    compiled_func::CompiledFunc, constants_map::ConstantsMap, lua_ir::LuaIR,
-    register_map::RegisterMap,
-};
-use bytecode::instructions::{HLInstr, Opcode};
+use self::compiled_func::{BasicBlock, CompiledFunc};
+use self::instr::{Arg, Instr};
+use self::lua_ir::LuaIR;
+use self::opcodes::IROpcode::*;
+use self::utils::{find_term, get_nodes, is_nonterm, is_term};
 use cfgrammar::RIdx;
 use lrpar::Node::{self, *};
 use lua5_3_l;
 use lua5_3_y;
+use std::collections::{BTreeSet, HashMap};
 use LuaParseTree;
 
 /// Compile the given parse tree into an SSA IR.
@@ -25,60 +25,175 @@ pub fn compile_to_ir(pt: &LuaParseTree) -> LuaIR {
 enum AssignmentType {
     /// Whether the assignment is a local one: `local a ...`.
     LocalDecl = 0,
-    /// If the update of _ENV should be postponed and handled by the caller.
+    /// The environment will be updated by the caller.
     Postponed = 1,
-    /// If the variable is global, code for _ENV[name] = val is emitted
+    /// If the variable is global, then the environment is updated as well.
     Regular = 2,
 }
 
-enum VariableType {
+enum ResultType {
     Local(usize),
     Global(usize),
+    Dict(usize),
+}
+
+impl ResultType {
+    fn get_reg(&self) -> usize {
+        match *self {
+            ResultType::Local(reg) => reg,
+            ResultType::Global(reg) => reg,
+            ResultType::Dict(..) => panic!("ResultType::Dict has no register"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum VarType<'a> {
+    Name(&'a str),
+    // from_reg , attr_reg
+    Dict(usize, usize),
+}
+
+impl<'a> VarType<'a> {
+    fn get_str(&self) -> &'a str {
+        match *self {
+            VarType::Name(name) => name,
+            VarType::Dict(..) => panic!("VarType::Dict has no name."),
+        }
+    }
 }
 
 /// Represents a compiler which translates a given Lua parse tree to an SSA IR.
-/// The compiler assumes that the `_ENV` variable is always stored in register 0!
 struct LuaToIR<'a> {
     pt: &'a LuaParseTree,
-    const_map: ConstantsMap,
     functions: Vec<CompiledFunc<'a>>,
-    curr_function: usize,
+    curr_func: usize,
+    curr_block: usize,
 }
 
 impl<'a> LuaToIR<'a> {
-    fn new(pt: &'a LuaParseTree) -> LuaToIR {
+    fn new(pt: &'a LuaParseTree) -> LuaToIR<'a> {
+        let functions = vec![CompiledFunc::new(0, false)];
         LuaToIR {
             pt,
-            const_map: ConstantsMap::new(),
-            functions: vec![CompiledFunc::new(0, false)],
-            curr_function: 0,
+            functions,
+            curr_func: 0,
+            curr_block: 0,
         }
     }
 
     /// Compile and return the intermediate representation of the given lua parse tree.
     pub fn to_lua_ir(mut self) -> LuaIR<'a> {
-        self.compile_block(&self.pt.tree);
-        LuaIR::new(self.functions, self.curr_function, self.const_map)
+        let new_block = self.curr_func().create_block();
+        self.compile_block_in_basic_block(&self.pt.tree, new_block);
+        LuaIR::new(self.functions, 0)
     }
 
-    fn curr_reg_map(&mut self) -> &mut RegisterMap<'a> {
-        self.functions[self.curr_function].mut_reg_map()
+    fn curr_func(&mut self) -> &mut CompiledFunc<'a> {
+        &mut self.functions[self.curr_func]
     }
 
-    /// Compile a <block> without recursively compiling its <retstatopt> child.
-    fn compile_block(&mut self, node: &'a Node<u8>) {
-        self.curr_reg_map().push_scope();
-        self.compile_block_without_scope(node);
-        self.curr_reg_map().pop_scope();
+    fn curr_block(&mut self) -> &mut BasicBlock<'a> {
+        let i = self.curr_block;
+        self.functions[self.curr_func].get_mut_block(i)
     }
 
-    /// Compiles a block in the current scope. This means that the user must
-    /// manully push/pop a new scope, if necessary.
-    fn compile_block_without_scope(&mut self, node: &'a Node<u8>) {
+    fn get_block(&mut self, i: usize) -> &mut BasicBlock<'a> {
+        self.functions[self.curr_func].get_mut_block(i)
+    }
+
+    fn instrs(&mut self) -> &mut Vec<Instr> {
+        self.curr_block().mut_instrs()
+    }
+
+    fn get_reg(&self, name: &'a str) -> Option<usize> {
+        self.get_reg_from_block(name, self.curr_func, self.curr_block)
+    }
+
+    fn get_upval(&mut self, name: &'a str) -> Option<usize> {
+        // does the current function define the upvalue already?
+        if let Some(&upval_idx) = self.curr_func().upvals().get(name) {
+            return Some(upval_idx);
+        }
+        let mut func = self.curr_func().parent_func();
+        let mut block = self.curr_func().parent_block();
+        // go through all the parents, and check if we can find <name>
+        while func.is_some() {
+            // found <name>, so we can create a new upvalue, and load it
+            if let Some(_) = self.get_reg_from_block(name, func.unwrap(), block.unwrap()) {
+                return Some(self.curr_func().push_upval(name));
+            } else {
+                let p_func = &self.functions[func.unwrap()];
+                block = p_func.parent_block();
+                func = p_func.parent_func();
+            }
+        }
+        None
+    }
+
+    fn set_upval(&mut self, name: &'a str, value: usize) {
+        if let Some(upval_idx) = self.get_upval(name) {
+            self.instrs().push(Instr::TwoArg(
+                SetUpVal,
+                Arg::Some(upval_idx + 1),
+                Arg::Reg(value),
+            ));
+        } else {
+            self.instrs().push(Instr::ThreeArg(
+                SetUpAttr,
+                Arg::Some(0),
+                Arg::Str(name.to_string()),
+                Arg::Reg(value),
+            ));
+        }
+    }
+
+    fn get_reg_from_block(&self, name: &'a str, func: usize, bb: usize) -> Option<usize> {
+        let curr_func = &self.functions[func];
+        let curr_block = curr_func.get_block(bb);
+        let res = curr_block.get_reg(name);
+        if res.is_some() {
+            return res;
+        }
+        for &d in curr_block.dominators() {
+            let res = self.get_reg_from_block(name, func, d);
+            if res.is_some() {
+                return res;
+            }
+        }
+        None
+    }
+
+    fn is_local(&self, name: &'a str) -> bool {
+        self.get_reg(name).is_some()
+    }
+
+    /// Compile a <block>.
+    fn compile_block(&mut self, node: &'a Node<u8>) -> usize {
+        let parent = self.curr_block;
+        let curr_block = self.curr_func().create_block_with_parents(vec![parent]);
+        self.curr_block = curr_block;
+        self.curr_block().push_dominator(parent);
+        self.compile_block_in_basic_block(node, curr_block);
+        curr_block
+    }
+
+    fn compile_block_in_basic_block(&mut self, node: &'a Node<u8>, i: usize) {
+        let old_block = self.curr_block;
+        self.curr_block = i;
         // nodes = [<statlistopt>, <retstatopt>]
         let nodes = get_nodes(node, lua5_3_y::R_BLOCK);
         self.compile_stat_list(&nodes[0]);
         self.compile_retstat(&nodes[1]);
+        self.curr_block = old_block;
+    }
+
+    pub fn create_child_block(&mut self) -> usize {
+        let parent = self.curr_block;
+        let curr_block = self.curr_func().create_block_with_parents(vec![parent]);
+        self.curr_block = curr_block;
+        self.curr_block().push_dominator(parent);
+        self.curr_block
     }
 
     /// Compile <retstatopt>
@@ -93,16 +208,15 @@ impl<'a> LuaToIR<'a> {
                     // push the first n-1 return values to the stack
                     for i in 0..(exprs.len() - 1) {
                         let reg = self.compile_expr(exprs[i]);
-                        self.functions[self.curr_function].push_instr(HLInstr(
-                            Opcode::PUSH,
-                            reg,
-                            0,
-                            // the vm should add 1 to the number of return values
-                            1,
+                        self.instrs().push(Instr::ThreeArg(
+                            PUSH,
+                            Arg::Reg(reg),
+                            Arg::Some(0),
+                            Arg::Some(1),
                         ));
                     }
                     self.unpack_to_stack(&exprs.last().unwrap(), true);
-                    self.functions[self.curr_function].push_instr(HLInstr(Opcode::RET, 0, 0, 0));
+                    self.instrs().push(Instr::ZeroArg(RET));
                 }
             }
             _ => panic!("Expected a <retstatopt>, but got {:#?}", node),
@@ -113,27 +227,32 @@ impl<'a> LuaToIR<'a> {
         let reg = self.compile_expr(last_expr);
         if self.is_unpackable(last_expr) {
             {
-                let len = self.functions[self.curr_function].instrs().len();
+                let len = self.curr_block().instrs().len();
                 // this is either a VarArg instr, or a MOVR
-                let last_instr = self.functions[self.curr_function].get_mut_instr(len - 1);
-                debug_assert!(last_instr.0 == Opcode::MOVR || last_instr.0 == Opcode::VarArg);
+                let last_instr = self.curr_block().get_mut(len - 1);
+                debug_assert!(last_instr.opcode() == MOVR || last_instr.opcode() == VarArg);
                 // check bytecode/instructions.rs for more info on why we set the third
                 // argument to 1 or 2
-                last_instr.1 = 0;
-                last_instr.2 = 0;
-                last_instr.3 = 1 + increment_ret_vals as usize;
+                *last_instr = Instr::OneArg(
+                    last_instr.opcode(),
+                    Arg::Some(1 + increment_ret_vals as usize),
+                );
             }
             // compile_expr will generate (VarArg/MOVR <new_reg> <op2> <op3>)
             // but because we are modifying the last instruction, there is
             // no need to keep the previously allocated register
-            self.curr_reg_map().pop_last_reg();
+            self.curr_func().pop_last_reg();
         } else {
-            self.functions[self.curr_function].push_instr(HLInstr(
-                Opcode::PUSH,
-                reg,
-                0,
-                increment_ret_vals as usize,
-            ));
+            if increment_ret_vals {
+                self.instrs().push(Instr::ThreeArg(
+                    PUSH,
+                    Arg::Reg(reg),
+                    Arg::Some(0),
+                    Arg::Some(1),
+                ));
+            } else {
+                self.instrs().push(Instr::OneArg(PUSH, Arg::Reg(reg)));
+            }
         }
     }
 
@@ -183,7 +302,11 @@ impl<'a> LuaToIR<'a> {
                         ref nodes,
                     } if ridx == lua5_3_y::R_EQEXPLISTOPT => {
                         let names = self.compile_names(&stat_nodes[1]);
-                        let exprs = self.get_underlying_exprs(&nodes[1]);
+                        let exprs = if nodes.len() > 0 {
+                            self.get_underlying_exprs(&nodes[1])
+                        } else {
+                            vec![]
+                        };
                         self.compile_local_assignments(names, exprs);
                     }
                     _ => {}
@@ -192,13 +315,13 @@ impl<'a> LuaToIR<'a> {
                 match (&stat_nodes[0], &stat_nodes[1]) {
                     // stat_nodes = [<function>, <funcname>, <funcbody>]
                     (Term { lexeme }, _) if lexeme.tok_id() == lua5_3_l::T_FUNCTION => {
-                        let name = self.compile_variable(&stat_nodes[1]);
+                        let name = self.compile_var_or_name(&stat_nodes[1]);
                         self.compile_assignment(name, &stat_nodes[2], AssignmentType::Regular);
                     }
                     // stat_nodes = [<varlist>, <eq>, <explist>]
                     (_, Term { lexeme }) if lexeme.tok_id() == lua5_3_l::T_EQ => {
                         // x, y, z = 1, 2
-                        let names = self.compile_names(&stat_nodes[0]);
+                        let names = self.compile_var_list(&stat_nodes[0]);
                         let exprs = self.get_underlying_exprs(&stat_nodes[2]);
                         self.compile_assignments(names, exprs);
                     }
@@ -214,6 +337,23 @@ impl<'a> LuaToIR<'a> {
                 } if ridx == lua5_3_y::R_FUNCTIONCALL => self.compile_call(&nodes[0], &nodes[1]),
                 _ => {}
             }
+        } else {
+            // stat_nodes = [<IF>, <exp>, <THEN>, <block>, <elselistopt>, <elseopt>, <END>]
+            if is_term(&stat_nodes[0], lua5_3_l::T_IF) {
+                self.compile_if(
+                    &stat_nodes[1],
+                    &stat_nodes[3],
+                    &stat_nodes[4],
+                    &stat_nodes[5],
+                );
+            } else if is_term(&stat_nodes[0], lua5_3_l::T_WHILE) {
+                self.compile_while(&stat_nodes[1], &stat_nodes[3]);
+            } else if is_term(&stat_nodes[0], lua5_3_l::T_FOR) && stat_nodes.len() == 9 {
+                // stat_nodes = [<FOR>, <NAME>, <EQ>, <exp>, <COMMA>,
+                //               <explist>, <DO>, <block>, <END>]
+                let name = self.compile_var_or_name(&stat_nodes[1]);
+                self.compile_for_count(name, &stat_nodes[3], &stat_nodes[5], &stat_nodes[7]);
+            }
         }
     }
 
@@ -225,21 +365,33 @@ impl<'a> LuaToIR<'a> {
         // compile local a = 1, local b = 2
         for i in 0..exprs.len() {
             // left hand-side = <namelist> and right hand-side = <explist>
-            self.compile_assignment(names[i], exprs[i], AssignmentType::LocalDecl);
+            self.compile_assignment(VarType::Name(names[i]), exprs[i], AssignmentType::LocalDecl);
         }
         // for all the remaining names (c, d), create a new empty register, because the
         // user might access the variable later
         if names.len() > exprs.len() {
             let mut regs = vec![];
             for i in exprs.len()..names.len() {
-                self.curr_reg_map().create_reg(names[i]);
-                regs.push(self.curr_reg_map().reg_count() - 1);
+                let new_reg = self.curr_func().get_new_reg();
+                self.curr_block().set_reg_name(new_reg, names[i], true);
+                regs.push(new_reg);
             }
             // check if the last expression is a vararg, so that we can emit the correct
             // instruction
+            let mut assign_nils = false;
             if let Some(expr) = exprs.last() {
                 if self.is_unpackable(expr) {
-                    self.unpack(&names[exprs.len()..names.len()], regs, expr);
+                    self.unpack(&regs, expr);
+                } else {
+                    assign_nils = true;
+                }
+            } else {
+                assign_nils = true;
+            }
+            if assign_nils {
+                for reg in regs {
+                    self.instrs()
+                        .push(Instr::TwoArg(MOV, Arg::Reg(reg), Arg::Nil));
                 }
             }
         } else if names.len() < exprs.len() {
@@ -254,20 +406,21 @@ impl<'a> LuaToIR<'a> {
     /// Compiles a multi-assignemnt (a combination of local and global assignments).
     /// * `names` - the variable names
     /// * `exprs` - the expressions that are assigned
-    fn compile_assignments(&mut self, names: Vec<&'a str>, exprs: Vec<&'a Node<u8>>) {
+    fn compile_assignments(&mut self, names: Vec<&'a Node<u8>>, exprs: Vec<&'a Node<u8>>) {
         // we want to emit _ENV[<name>] = <reg> only after we assign all expressions into
         // registers. This is because of how vararg expects registers to be ordered.
         // For instance `a, b = ...`, will generate `VarArg 3, 2, 0` meaning that the vm
         // will copy two variable arguments into registers 3 and 4. We have to make sure
         // that a, and b point to consecutive registers, but a global assignment will
         // generate additional instructions, which we try to postpone
-        let mut postponed_envs: Vec<(&str, usize)> = vec![];
+        let mut postponed_instrs: Vec<(VarType<'a>, usize)> = vec![];
         // example: x, y, z, w = 1, 2
         // compile x = 1, y = 2
         for (name, expr) in names.iter().zip(exprs.iter()) {
-            let res = self.compile_assignment(name, expr, AssignmentType::Postponed);
-            if let VariableType::Global(reg) = res {
-                postponed_envs.push((name, reg));
+            let var = self.compile_var_or_name(name);
+            let res = self.compile_assignment(var, expr, AssignmentType::Postponed);
+            if let ResultType::Global(reg) = res {
+                postponed_instrs.push((var, reg));
             }
         }
         // for all the remaining names (z, w), create a new empty register, and update
@@ -277,17 +430,36 @@ impl<'a> LuaToIR<'a> {
         if names.len() > exprs.len() {
             let mut regs = vec![];
             for i in exprs.len()..names.len() {
-                let reg = self.curr_reg_map().get_new_reg();
-                if !self.curr_reg_map().is_local(names[i]) {
-                    postponed_envs.push((names[i], reg));
-                } else {
-                    self.curr_reg_map().set_reg(names[i], reg);
+                let var = self.compile_var_or_name(names[i]);
+                let reg = self.curr_func().get_new_reg();
+                match var {
+                    VarType::Name(name) => {
+                        if !self.is_local(name) {
+                            postponed_instrs.push((var, reg));
+                        } else {
+                            self.curr_block().set_reg_name(reg, name, false);
+                        }
+                    }
+                    VarType::Dict(..) => {
+                        postponed_instrs.push((var, reg));
+                    }
                 }
                 regs.push(reg);
             }
+            let mut assign_nils = false;
             if let Some(expr) = exprs.last() {
                 if self.is_unpackable(expr) {
-                    self.unpack(&names[exprs.len()..names.len()], regs, expr);
+                    self.unpack(&regs, expr);
+                } else {
+                    assign_nils = true;
+                }
+            } else {
+                assign_nils = true;
+            }
+            if assign_nils {
+                for reg in regs {
+                    self.instrs()
+                        .push(Instr::TwoArg(MOV, Arg::Reg(reg), Arg::Nil));
                 }
             }
         } else if names.len() < exprs.len() {
@@ -298,8 +470,20 @@ impl<'a> LuaToIR<'a> {
             }
         }
         // generate the missing instructions that were postponed
-        for (name, reg) in postponed_envs {
-            self.add_to_env(name, reg);
+        for (var, reg) in postponed_instrs {
+            match var {
+                VarType::Name(name) => {
+                    self.set_upval(name, reg);
+                }
+                VarType::Dict(from, attr) => {
+                    self.instrs().push(Instr::ThreeArg(
+                        SetAttr,
+                        Arg::Reg(from),
+                        Arg::Reg(attr),
+                        Arg::Reg(reg),
+                    ));
+                }
+            }
         }
     }
 
@@ -307,24 +491,91 @@ impl<'a> LuaToIR<'a> {
         self.is_vararg(expr) || self.is_functioncall(expr)
     }
 
-    fn unpack(&mut self, names: &[&str], regs: Vec<usize>, expr: &Node<u8>) {
-        if self.is_vararg(expr) {
-            let instr = self.functions[self.curr_function].get_instr_with_opcode(Opcode::VarArg);
-            instr.2 += names.len();
-        } else {
-            // local a, b, c = f(2)
-            // we are unpacking f(2) into a, b, and c, but we have already pushed a
-            // MOVR in compile_assignemnts, thus we have to unpack the rest of the
-            // values into b, and c
-            for (i, reg) in regs.iter().enumerate() {
-                self.functions[self.curr_function].push_instr(HLInstr(
-                    Opcode::MOVR,
-                    *reg,
-                    i + 1, // + 1 because of the extra MOVR
-                    0,
-                ));
+    fn unpack(&mut self, regs: &Vec<usize>, expr: &Node<u8>) {
+        // local a, b, c = f(2)
+        // we are unpacking f(2) into a, b, and c, but we have already pushed a
+        // MOVR in compile_assignemnts, thus we have to unpack the rest of the
+        // values into b, and c
+        let opcode = if self.is_vararg(expr) { VarArg } else { MOVR };
+        for (i, reg) in regs.iter().enumerate() {
+            self.instrs()
+                .push(Instr::TwoArg(opcode, Arg::Reg(*reg), Arg::Some(i + 1)));
+        }
+    }
+
+    fn find_name(&mut self, name: &'a str) -> usize {
+        match self.get_reg(name) {
+            Some(reg) => reg,
+            // check to see if any parent functions or blocks contain this variable
+            None => {
+                let reg = self.curr_func().get_new_reg();
+                if let Some(upval_idx) = self.get_upval(name) {
+                    self.instrs().push(Instr::TwoArg(
+                        GetUpVal,
+                        Arg::Reg(reg),
+                        Arg::Some(upval_idx + 1),
+                    ))
+                } else {
+                    self.instrs().push(Instr::ThreeArg(
+                        GetUpAttr,
+                        Arg::Reg(reg),
+                        Arg::Some(0),
+                        Arg::Str(name.to_string()),
+                    ));
+                }
+                reg
             }
         }
+    }
+
+    fn compile_prefix_exp(&mut self, node: &'a Node<u8>) -> usize {
+        match *node {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_PREFIXEXP => {
+                if nodes.len() > 1 {
+                    self.compile_expr(&nodes[1])
+                } else if is_nonterm(&nodes[0], lua5_3_y::R_FUNCTIONCALL) {
+                    self.compile_expr(&nodes[0])
+                } else {
+                    let var = self.compile_var_or_name(&nodes[0]);
+                    match var {
+                        VarType::Name(name) => self.find_name(name),
+                        VarType::Dict(from, attr) => {
+                            let reg = self.curr_func().get_new_reg();
+                            self.instrs().push(Instr::ThreeArg(
+                                GetAttr,
+                                Arg::Reg(reg),
+                                Arg::Reg(from),
+                                Arg::Reg(attr),
+                            ));
+                            reg
+                        }
+                    }
+                }
+            }
+            _ => panic!("Expected <prefixexp>, got {:?}", node),
+        }
+    }
+
+    fn compile_var_list(&self, node: &'a Node<u8>) -> Vec<&'a Node<u8>> {
+        let mut vars = vec![];
+        match *node {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_VARLIST => {
+                if nodes.len() > 1 {
+                    vars.extend(self.compile_var_list(&nodes[0]));
+                    vars.push(&nodes[2]);
+                } else {
+                    vars.push(&nodes[0]);
+                }
+            }
+            _ => panic!("Expected <varlist> got {:?}", node),
+        }
+        vars
     }
 
     /// Compile an assignment by compiling <right> and then storing the result in <left>.
@@ -334,91 +585,88 @@ impl<'a> LuaToIR<'a> {
     /// Returns whether the assignment was local or global.
     fn compile_assignment(
         &mut self,
-        name: &'a str,
+        var: VarType<'a>,
         right: &'a Node<u8>,
         action: AssignmentType,
-    ) -> VariableType {
-        let old_len = self.functions[self.curr_function].instrs().len();
-        let mut value = self.compile_expr(right);
-        // the register map only keeps track of local variables
-        // if we are compiling: `x = 3`, then we also have to check if x is in `reg_map`
-        // if it is, then it is a local assignment (because `reg_map` only stores
-        // mappings of local variable to registers), if it isn't then we have to look
-        // it up in _ENV
-        if action == AssignmentType::LocalDecl || self.curr_reg_map().get_reg(name).is_some() {
-            // No new instructions were added, which means that <right> has already been
-            // computed and stored in some register. Because we are compiling an
-            // assignment, we will create a copy of this result and store it in <left>.
-            // See test `load_string_multiple_times`.
-            if self.functions[self.curr_function].instrs().len() == old_len {
-                let new_reg = self.curr_reg_map().get_new_reg();
-                self.functions[self.curr_function].push_instr(HLInstr(
-                    Opcode::MOV,
-                    new_reg,
-                    value,
-                    0,
-                ));
-                value = new_reg;
+    ) -> ResultType {
+        match var {
+            VarType::Name(name) => {
+                let old_len = self.curr_block().instrs().len();
+                let mut value = self.compile_expr(right);
+                // the register map only keeps track of local variables
+                // if we are compiling: `x = 3`, then we also have to check if x is in `reg_map`
+                // if it is, then it is a local assignment (because `reg_map` only stores
+                // mappings of local variable to registers), if it isn't then we load it from
+                // the global mapping
+                if action == AssignmentType::LocalDecl || self.get_reg(name).is_some() {
+                    // No new instructions were added, which means that <right> has already been
+                    // computed and stored in some register. Because we are compiling an
+                    // assignment, we will create a copy of this result and store it in <left>.
+                    // See test `load_string_multiple_times`.
+                    if self.curr_block().instrs().len() == old_len {
+                        let new_reg = self.curr_func().get_new_reg();
+                        self.instrs()
+                            .push(Instr::TwoArg(MOV, Arg::Reg(new_reg), Arg::Reg(value)));
+                        value = new_reg;
+                    }
+                    // if a variable is assigned a value multiple times, we have to make sure
+                    // that the map knows the new register which holds the new value
+                    self.curr_block().set_reg_name(
+                        value,
+                        name,
+                        action == AssignmentType::LocalDecl,
+                    );
+                    ResultType::Local(value)
+                } else {
+                    if action != AssignmentType::Postponed {
+                        self.set_upval(name, value);
+                    }
+                    ResultType::Global(value)
+                }
             }
-            // if a variable is assigned a value multiple times, we have to make sure
-            // that the map knows the new register which holds the new value
-            self.curr_reg_map().set_reg(name, value);
-            VariableType::Local(value)
-        } else {
-            if action != AssignmentType::Postponed {
-                self.add_to_env(name, value);
-            }
-            VariableType::Global(value)
-        }
-    }
-
-    /// Push the necessary instructions in order to store <value> in _ENV[<name>]
-    /// * `name` - the attribute name
-    /// * `value` - the registers which has the value of <name>
-    fn add_to_env(&mut self, name: &'a str, value: usize) {
-        // we would like to generate code for the following statement: _ENV[name] = value
-        // load a reference to _ENV
-        let env_reg = self.curr_reg_map().get_reg("_ENV").unwrap();
-        // prepare the attribute for _ENV which is the name of the variable
-        let name_index = self.const_map.get_str(name.to_string());
-        let attr_reg = self.get_const_str_reg(name_index);
-        self.functions[self.curr_function].push_instr(HLInstr(
-            Opcode::SetAttr,
-            env_reg,
-            attr_reg,
-            value,
-        ));
-    }
-
-    /// Get the register which contains the constant string <name_index>.
-    /// If no register holds this value, then this method creates the necessary
-    /// instruction to load the string.
-    fn get_const_str_reg(&mut self, name_index: usize) -> usize {
-        match self.curr_reg_map().get_str_reg(name_index) {
-            Some(i) => i,
-            None => {
-                let reg = self.curr_reg_map().get_new_reg();
-                self.functions[self.curr_function].push_instr(HLInstr(
-                    Opcode::LDS,
-                    reg,
-                    name_index,
-                    0,
-                ));
-                self.curr_reg_map().set_str_reg(name_index, reg);
-                reg
+            VarType::Dict(from, attr) => {
+                let reg = self.compile_expr(right);
+                if action != AssignmentType::Postponed {
+                    self.instrs().push(Instr::ThreeArg(
+                        SetAttr,
+                        Arg::Reg(from),
+                        Arg::Reg(attr),
+                        Arg::Reg(reg),
+                    ));
+                }
+                ResultType::Dict(reg)
             }
         }
     }
 
-    /// Jumps to the first child of <node> which denotes a variable name.
-    fn compile_variable(&self, node: &Node<u8>) -> &'a str {
-        let name = find_term(node, lua5_3_l::T_NAME);
-        match name {
-            Some(Term { lexeme }) => self
-                .pt
-                .get_string(lexeme.start(), lexeme.end().unwrap_or(lexeme.start())),
+    fn compile_var_or_name(&mut self, node: &'a Node<u8>) -> VarType<'a> {
+        match *node {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_VAR => {
+                if nodes.len() == 1 {
+                    VarType::Name(self.get_str(&nodes[0]))
+                } else if nodes.len() == 4 {
+                    // nodes = [<prefixexp, <LSQUARE>, <exp>, <RSQUARE>]
+                    let prefixexp = self.compile_prefix_exp(&nodes[0]);
+                    let expr = self.compile_expr(&nodes[2]);
+                    VarType::Dict(prefixexp, expr)
+                } else {
+                    let prefixexp = self.compile_prefix_exp(&nodes[0]);
+                    let string = self.get_str(&nodes[2]);
+                    let reg = self.curr_func().get_new_reg();
+                    self.instrs().push(Instr::TwoArg(
+                        MOV,
+                        Arg::Reg(reg),
+                        Arg::Str(string.to_string()),
+                    ));
+                    VarType::Dict(prefixexp, reg)
+                }
+            }
             _ => {
-                panic!("Must have assignments of form: var = expr!");
+                let name = find_term(node, lua5_3_l::T_NAME).unwrap();
+                VarType::Name(self.get_str(name))
             }
         }
     }
@@ -430,50 +678,41 @@ impl<'a> LuaToIR<'a> {
             Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
-            } if ridx == lua5_3_y::R_FUNCBODY => {
-                let old_curr_function = self.curr_function;
-                // create a new compiledfunc for this function, and add it as a child
-                // of the enclosing function
-                let new_function_id = self.functions.len();
-                let (new_function, func_num) = {
-                    let mut curr_function = &mut self.functions[self.curr_function];
-                    curr_function.push_func(new_function_id);
-                    let param_nodes = get_nodes(&nodes[1], lua5_3_y::R_PARLIST);
-                    let is_vararg = param_nodes.len() > 0
-                        && is_term(param_nodes.last().unwrap(), lua5_3_l::T_DOTDOTDOT);
-                    (
-                        CompiledFunc::new(new_function_id, is_vararg),
-                        curr_function.funcs_len() - 1,
-                    )
-                };
-                self.functions.push(new_function);
-                self.curr_function = new_function_id;
-                self.curr_reg_map().push_scope();
-                // make the first N registers point to the first N parameters
-                self.compile_param_list(&nodes[1]);
-                self.compile_block_without_scope(&nodes[3]);
-                self.curr_reg_map().pop_scope();
-                // restore the old state so that we can create a closure instruction
-                // in the outer function
-                self.curr_function = old_curr_function;
-                let reg = self.curr_reg_map().get_new_reg();
-                self.functions[self.curr_function].push_instr(HLInstr(
-                    Opcode::CLOSURE,
-                    reg,
-                    func_num,
-                    0,
-                ));
-                reg
-            }
+            } if ridx == lua5_3_y::R_FUNCBODY => self.compile_funcbody(nodes),
             Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
             } if ridx == lua5_3_y::R_FUNCTIONCALL => {
                 self.compile_call(&nodes[0], &nodes[1]);
-                let reg = self.curr_reg_map().get_new_reg();
-                self.functions[self.curr_function].push_instr(HLInstr(Opcode::MOVR, reg, 0, 0));
+                let reg = self.curr_func().get_new_reg();
+                self.instrs()
+                    .push(Instr::TwoArg(MOVR, Arg::Reg(reg), Arg::Some(0)));
                 reg
             }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_EXP => {
+                if nodes.len() > 1 {
+                    self.compile_or_short_circuit(nodes)
+                } else {
+                    self.compile_expr(&nodes[0])
+                }
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_EXP1 => {
+                if nodes.len() > 1 {
+                    self.compile_and_short_circuit(nodes)
+                } else {
+                    self.compile_expr(&nodes[0])
+                }
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                nodes: _,
+            } if ridx == lua5_3_y::R_PREFIXEXP => self.compile_prefix_exp(node),
             Nonterm {
                 ridx: RIdx(_ridx),
                 ref nodes,
@@ -484,9 +723,9 @@ impl<'a> LuaToIR<'a> {
                     debug_assert!(nodes.len() == 3);
                     let left = self.compile_expr(&nodes[0]);
                     let right = self.compile_expr(&nodes[2]);
-                    let new_var = self.curr_reg_map().get_new_reg();
+                    let new_var = self.curr_func().get_new_reg();
                     let instr = self.get_instr(&nodes[1], new_var, left, right);
-                    self.functions[self.curr_function].push_instr(instr);
+                    self.instrs().push(instr);
                     new_var
                 }
             }
@@ -496,58 +735,31 @@ impl<'a> LuaToIR<'a> {
                     .get_string(lexeme.start(), lexeme.end().unwrap_or(lexeme.start()));
                 match lexeme.tok_id() {
                     lua5_3_l::T_NUMERAL => {
-                        let reg = self.curr_reg_map().get_new_reg();
-                        if value.contains(".") {
-                            let fl = self.const_map.get_float(value.to_string());
-                            self.functions[self.curr_function].push_instr(HLInstr(
-                                Opcode::LDF,
-                                reg,
-                                fl,
-                                0,
-                            ));
+                        let new_reg = self.curr_func().get_new_reg();
+                        let arg = if value.contains(".") {
+                            Arg::Float(value.parse().unwrap())
                         } else {
-                            let int = self.const_map.get_int(value.parse().unwrap());
-                            self.functions[self.curr_function].push_instr(HLInstr(
-                                Opcode::LDI,
-                                reg,
-                                int,
-                                0,
-                            ));
-                        }
-                        reg
+                            Arg::Int(value.parse().unwrap())
+                        };
+                        self.instrs()
+                            .push(Instr::TwoArg(MOV, Arg::Reg(new_reg), arg));
+                        new_reg
                     }
                     lua5_3_l::T_SHORT_STR => {
-                        let len = value.len();
-                        // make sure that the quotes are not included!
-                        let short_str = self.const_map.get_str(value[1..(len - 1)].to_string());
-                        self.get_const_str_reg(short_str)
+                        let new_reg = self.curr_func().get_new_reg();
+                        self.instrs().push(Instr::TwoArg(
+                            MOV,
+                            Arg::Reg(new_reg),
+                            Arg::Str(value[1..(value.len() - 1)].to_string()),
+                        ));
+                        new_reg
                     }
-                    lua5_3_l::T_NAME => {
-                        // if the variable is in a register, then we can return reg number
-                        // otherwise we have to generate code for `_ENV[<name>]`
-                        self.curr_reg_map().get_reg(value).unwrap_or_else(|| {
-                            let env_reg = self.curr_reg_map().get_reg("_ENV").unwrap();
-                            let name_index = self.const_map.get_str(value.to_string());
-                            let attr_reg = self.get_const_str_reg(name_index);
-                            let reg = self.curr_reg_map().get_new_reg();
-                            self.functions[self.curr_function].push_instr(HLInstr(
-                                Opcode::GetAttr,
-                                reg,
-                                env_reg,
-                                attr_reg,
-                            ));
-                            reg
-                        })
-                    }
+                    lua5_3_l::T_NAME => self.find_name(value),
                     lua5_3_l::T_DOTDOTDOT => {
-                        if self.functions[self.curr_function].is_vararg() {
-                            let reg = self.curr_reg_map().get_new_reg();
-                            self.functions[self.curr_function].push_instr(HLInstr(
-                                Opcode::VarArg,
-                                reg,
-                                1,
-                                0,
-                            ));
+                        if self.curr_func().is_vararg() {
+                            let reg = self.curr_func().get_new_reg();
+                            self.instrs()
+                                .push(Instr::TwoArg(VarArg, Arg::Reg(reg), Arg::Some(0)));
                             reg
                         } else {
                             panic!("Cannot use '...' outside of a vararg function.")
@@ -559,6 +771,172 @@ impl<'a> LuaToIR<'a> {
                 }
             }
         }
+    }
+
+    fn compile_funcbody(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
+        let old_curr_func = self.curr_func;
+        // create a new `CompiledFunc` for this function
+        let new_func_id = self.functions.len();
+        let param_nodes = get_nodes(&nodes[1], lua5_3_y::R_PARLIST);
+        let param_count = param_nodes.len();
+        let is_vararg =
+            param_count > 0 && is_term(param_nodes.last().unwrap(), lua5_3_l::T_DOTDOTDOT);
+        let mut new_func = CompiledFunc::new(0, is_vararg);
+        new_func.set_parent_func(self.curr_func);
+        new_func.set_parent_block(self.curr_block);
+        self.functions.push(new_func);
+        self.curr_func = new_func_id;
+        let new_basic_block = self.curr_func().create_block();
+        // make the first N registers point to the first N parameters
+        self.compile_param_list(&nodes[1]);
+        self.compile_block_in_basic_block(&nodes[3], new_basic_block);
+        // restore the old state so that we can create a closure instruction
+        // in the outer function
+        self.curr_func = old_curr_func;
+        let reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::TwoArg(
+            CLOSURE,
+            Arg::Reg(reg),
+            Arg::Func(new_func_id),
+        ));
+        // declare, update and move upvalues based on what the child function depends on
+        let (instrs, curr_func_upvals) = {
+            let mut curr_func_upvals_count = self.curr_func().upvals().len();
+            let new_func = &self.functions[new_func_id];
+            let mut instrs = Vec::with_capacity(new_func.upvals().len());
+            let mut curr_func_upvals = vec![];
+            // move the upvalues into the new function
+            for (name, location) in new_func.upvals() {
+                // does the child function have a dependency on any of the current local
+                // variables?
+                if let Some(local_reg) = self.get_reg(name) {
+                    instrs.push(Instr::ThreeArg(
+                        MovUp,
+                        Arg::Reg(reg),
+                        Arg::Some(*location + 1),
+                        Arg::Reg(local_reg),
+                    ))
+                } else {
+                    // the child has a dependency on either:
+                    // i)  an already created upvalue of the current function
+                    // ii) a local in some outer function, which has not been
+                    // declared as an upvalue
+                    let upval_idx = if let Some(upval_idx) =
+                        self.functions[self.curr_func].upvals().get(name)
+                    {
+                        *upval_idx + 1
+                    } else {
+                        curr_func_upvals.push(*name);
+                        curr_func_upvals_count += 1;
+                        curr_func_upvals_count
+                    };
+                    instrs.push(Instr::ThreeArg(
+                        MovUpFromUp,
+                        Arg::Reg(reg),
+                        Arg::Some(*location + 1),
+                        Arg::Some(upval_idx),
+                    ));
+                }
+            }
+            (instrs, curr_func_upvals)
+        };
+        self.instrs().extend(instrs);
+        for name in curr_func_upvals {
+            self.curr_func().push_upval(name);
+        }
+        reg
+    }
+
+    fn compile_or_short_circuit(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
+        let left = self.compile_expr(&nodes[0]);
+        let parent = self.curr_block;
+        let false_branch = self.create_child_block();
+        let right = self.compile_expr(&nodes[2]);
+        self.curr_block = parent;
+        let merge_branch = self.create_child_block();
+        let merge_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::NArg(
+            Phi,
+            vec![Arg::Reg(merge_reg), Arg::Reg(left), Arg::Reg(right)],
+        ));
+        self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
+            JmpEQ,
+            Arg::Reg(left),
+            Arg::Some(merge_branch),
+            Arg::Some(false_branch),
+        ));
+        merge_reg
+    }
+
+    fn compile_and_short_circuit(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
+        let left = self.compile_expr(&nodes[0]);
+        let parent = self.curr_block;
+        let false_branch = self.create_child_block();
+        let right = self.compile_expr(&nodes[2]);
+        self.curr_block = parent;
+        let merge_branch = self.create_child_block();
+        let merge_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::NArg(
+            Phi,
+            vec![Arg::Reg(merge_reg), Arg::Reg(left), Arg::Reg(right)],
+        ));
+        self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
+            JmpNE,
+            Arg::Reg(left),
+            Arg::Some(false_branch),
+            Arg::Some(merge_branch),
+        ));
+        merge_reg
+    }
+
+    /// Compile an and short circuit in which the lhs is in <left> and the rhs block
+    /// contains the instructions <right_operand_instrs>.
+    fn compile_and_short_circuit2(
+        &mut self,
+        left: usize,
+        right_operand_instrs: Vec<Instr>,
+    ) -> usize {
+        let parent = self.curr_block;
+        let false_branch = self.create_child_block();
+        self.curr_block().mut_instrs().extend(right_operand_instrs);
+        let right =
+            if let Instr::ThreeArg(_, arg1, _, _) = self.curr_block().instrs().last().unwrap() {
+                arg1.get_reg()
+            } else {
+                panic!("Expected a three argument instruction!")
+            };
+        self.curr_block = parent;
+        let merge_branch = self.create_child_block();
+        let merge_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::NArg(
+            Phi,
+            vec![Arg::Reg(merge_reg), Arg::Reg(left), Arg::Reg(right)],
+        ));
+        self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
+            JmpNE,
+            Arg::Reg(left),
+            Arg::Some(false_branch),
+            Arg::Some(merge_branch),
+        ));
+        merge_reg
+    }
+
+    fn compile_or_short_circuit2(&mut self, left: usize, right: usize, parent: usize) -> usize {
+        let false_branch = self.curr_block;
+        self.curr_block = parent;
+        let merge_branch = self.create_child_block();
+        let merge_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::NArg(
+            Phi,
+            vec![Arg::Reg(merge_reg), Arg::Reg(left), Arg::Reg(right)],
+        ));
+        self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
+            JmpEQ,
+            Arg::Reg(left),
+            Arg::Some(false_branch),
+            Arg::Some(merge_branch),
+        ));
+        merge_reg
     }
 
     /// Compile an <explist> or <explistopt> and return the roots of the expressions.
@@ -594,8 +972,17 @@ impl<'a> LuaToIR<'a> {
         }
     }
 
+    fn get_str(&self, name: &'a Node<u8>) -> &'a str {
+        match *name {
+            Term { lexeme } if lexeme.tok_id() == lua5_3_l::T_NAME => self
+                .pt
+                .get_string(lexeme.start(), lexeme.end().unwrap_or(lexeme.start())),
+            _ => panic!("Expected term <NAME>, got {:?}", name),
+        }
+    }
+
     /// Compile a <namelist> or a <varlist> into a vector of names.
-    fn compile_names(&mut self, names: &Node<u8>) -> Vec<&'a str> {
+    fn compile_names(&mut self, names: &'a Node<u8>) -> Vec<&'a str> {
         match *names {
             Nonterm {
                 ridx: RIdx(ridx),
@@ -604,11 +991,11 @@ impl<'a> LuaToIR<'a> {
                 let mut names = vec![];
                 // nodes = <NAME>
                 if nodes.len() == 1 {
-                    names.push(self.compile_variable(&nodes[0]));
+                    names.push(self.get_str(&nodes[0]));
                 } else {
-                    // nodes = [<name/varlist>, <COMMA>, <NAME>]
+                    // nodes = [<namelist>, <COMMA>, <NAME>]
                     names.extend(self.compile_names(&nodes[0]));
-                    names.push(self.compile_variable(&nodes[2]));
+                    names.push(self.get_str(&nodes[2]));
                 }
                 names
             }
@@ -618,9 +1005,9 @@ impl<'a> LuaToIR<'a> {
 
     /// Compile a <parlist> node, and assign each name a register in the current
     /// register map.
-    /// The first parameter of a function is assigned to register 1, and so on.
+    /// The first parameter of a function is assigned to register 0, and so on.
     /// For now the vararg parameter is ignored.
-    fn compile_param_list(&mut self, params: &Node<u8>) {
+    fn compile_param_list(&mut self, params: &'a Node<u8>) {
         match *params {
             Nonterm {
                 ridx: RIdx(ridx),
@@ -643,10 +1030,10 @@ impl<'a> LuaToIR<'a> {
                         _ => {}
                     }
                 }
-                self.functions[self.curr_function].set_param_count(names.len());
-                let mut reg_map = self.curr_reg_map();
+                self.functions[self.curr_func].set_param_count(names.len());
                 for name in names {
-                    reg_map.create_reg(name);
+                    let reg = self.curr_func().get_new_reg();
+                    self.curr_block().set_reg_name(reg, name, true);
                 }
             }
             _ => panic!("Root node was not a <parlist>"),
@@ -655,7 +1042,7 @@ impl<'a> LuaToIR<'a> {
 
     /// Compile a <functioncall>.
     fn compile_call(&mut self, func: &'a Node<u8>, params: &'a Node<u8>) {
-        let func_reg = self.compile_expr(find_term(func, lua5_3_l::T_NAME).unwrap());
+        let func_reg = self.compile_prefix_exp(func);
         let params = match *params {
             Nonterm {
                 ridx: RIdx(ridx),
@@ -663,23 +1050,18 @@ impl<'a> LuaToIR<'a> {
             } if ridx == lua5_3_y::R_ARGS => &nodes[1],
             _ => panic!("Missing node <args> from <functioncall>"),
         };
-        self.functions[self.curr_function].push_instr(HLInstr(Opcode::SetTop, func_reg, 0, 0));
+        self.instrs()
+            .push(Instr::OneArg(SetTop, Arg::Reg(func_reg)));
         let exprs = self.get_underlying_exprs(params);
         if exprs.len() > 0 {
             // push the arguments to the function
             for i in 0..(exprs.len() - 1) {
                 let reg = self.compile_expr(exprs[i]);
-                self.functions[self.curr_function].push_instr(HLInstr(Opcode::PUSH, reg, 0, 0));
+                self.instrs().push(Instr::OneArg(PUSH, Arg::Reg(reg)));
             }
             self.unpack_to_stack(&exprs.last().unwrap(), false);
         }
-        // call the function, but also specify how many arguments it should expect
-        self.functions[self.curr_function].push_instr(HLInstr(
-            Opcode::CALL,
-            func_reg,
-            exprs.len(),
-            0,
-        ));
+        self.instrs().push(Instr::OneArg(CALL, Arg::Reg(func_reg)));
     }
 
     /// Checks if exp is '...'
@@ -706,108 +1088,359 @@ impl<'a> LuaToIR<'a> {
     }
 
     /// Get the appropriate instruction for a given Node::Term.
-    fn get_instr(&self, node: &'a Node<u8>, reg: usize, lreg: usize, rreg: usize) -> HLInstr {
+    fn get_instr(&self, node: &'a Node<u8>, reg: usize, lreg: usize, rreg: usize) -> Instr {
         if let Term { lexeme } = node {
             let opcode = match lexeme.tok_id() {
-                lua5_3_l::T_PLUS => Opcode::ADD,
-                lua5_3_l::T_MINUS => Opcode::SUB,
-                lua5_3_l::T_STAR => Opcode::MUL,
-                lua5_3_l::T_FSLASH => Opcode::DIV,
-                lua5_3_l::T_MOD => Opcode::MOD,
-                lua5_3_l::T_FSFS => Opcode::FDIV,
-                lua5_3_l::T_CARET => Opcode::EXP,
-                lua5_3_l::T_EQEQ => Opcode::EQ,
+                lua5_3_l::T_PLUS => ADD,
+                lua5_3_l::T_MINUS => SUB,
+                lua5_3_l::T_STAR => MUL,
+                lua5_3_l::T_FSLASH => DIV,
+                lua5_3_l::T_MOD => MOD,
+                lua5_3_l::T_FSFS => FDIV,
+                lua5_3_l::T_CARET => EXP,
+                lua5_3_l::T_EQEQ => EQ,
+                lua5_3_l::T_LT => LT,
+                lua5_3_l::T_GT => GT,
+                lua5_3_l::T_LE => LE,
+                lua5_3_l::T_GE => GE,
+                lua5_3_l::T_NOTEQ => NE,
                 _ => unimplemented!("Instruction {:#?}", node),
             };
-            HLInstr(opcode, reg, lreg, rreg)
+            Instr::ThreeArg(opcode, Arg::Reg(reg), Arg::Reg(lreg), Arg::Reg(rreg))
         } else {
             panic!("Expected a Node::Term!");
         }
+    }
+
+    /// Compile an if-statement.
+    fn compile_if(
+        &mut self,
+        expr: &'a Node<u8>,
+        block: &'a Node<u8>,
+        elselistopt: &'a Node<u8>,
+        elseopt: &'a Node<u8>,
+    ) {
+        let before_if_index = self.curr_block;
+        let elselist = self.get_elselist(elselistopt);
+        let mut branches: Vec<usize> = vec![(expr, block)]
+            .iter()
+            .chain(elselist.iter())
+            .map(|(e, b)| {
+                let before = self.curr_block;
+                // compile if condition
+                let expr_res = self.compile_expr(e);
+                // compile true branch as a child of the current block
+                let true_block = self.compile_block(b);
+                self.curr_block = before;
+                let last_true_block = self.curr_func().blocks().len() - 1;
+                // create a new block
+                let parent = self.curr_block;
+                let elif_block = self.curr_func().create_block_with_parents(vec![parent]);
+                self.instrs().push(Instr::ThreeArg(
+                    JmpNE,
+                    Arg::Reg(expr_res),
+                    Arg::Some(true_block),
+                    Arg::Some(elif_block),
+                ));
+                self.curr_block = elif_block;
+                self.curr_block().push_dominator(before);
+                last_true_block
+            })
+            .collect();
+        let else_nodes = get_nodes(elseopt, lua5_3_y::R_ELSEOPT);
+        let process_else = else_nodes.len() > 0;
+        if process_else {
+            let else_block = self.curr_block;
+            self.compile_block_in_basic_block(&else_nodes[1], else_block);
+            branches.push(else_block);
+            self.curr_block = self.curr_func().create_block();
+            self.curr_block().push_dominator(before_if_index);
+        }
+        for &branch in &branches {
+            let curr = self.curr_block;
+            self.get_block(branch)
+                .mut_instrs()
+                .push(Instr::OneArg(Jmp, Arg::Some(curr)));
+            self.get_block(curr).push_parent(branch);
+        }
+        if !process_else {
+            branches.push(self.curr_block().parents()[0]);
+        }
+        self.generate_phis(before_if_index);
+    }
+
+    fn generate_phis(&mut self, main_block: usize) {
+        let mut phis: HashMap<&'a str, BTreeSet<usize>> = HashMap::new();
+        {
+            let curr_func = &self.functions[self.curr_func];
+            let curr_block_index = self.curr_block;
+            let curr_block = curr_func.get_block(curr_block_index);
+            for &p in curr_block
+                .parents()
+                .iter()
+                .chain(vec![curr_block_index, main_block].iter())
+            {
+                for (name, &reg) in curr_func.get_block(p).non_locals() {
+                    phis.entry(name)
+                        .and_modify(|args| {
+                            args.insert(reg);
+                        })
+                        .or_insert_with(|| {
+                            let mut new_set = BTreeSet::new();
+                            new_set.insert(reg);
+                            new_set
+                        });
+                }
+            }
+        }
+        for (name, mut args) in phis {
+            args.insert(
+                self.get_reg_from_block(name, self.curr_func, main_block)
+                    .expect("Non-local found in branch, but not in parent blocks!"),
+            );
+            let mut args: Vec<Arg> = args.iter().map(|v| Arg::Reg(*v)).collect();
+            let new_reg = self.curr_func().get_new_reg();
+            args.insert(0, Arg::Reg(new_reg));
+            self.curr_block().set_reg_name(new_reg, name, false);
+            self.instrs().push(Instr::NArg(Phi, args));
+        }
+    }
+
+    /// Compile an <elselist> or <elselistopt>.
+    fn get_elselist(&mut self, elselistopt: &'a Node<u8>) -> Vec<(&'a Node<u8>, &'a Node<u8>)> {
+        let mut blocks = vec![];
+        match *elselistopt {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_ELSELISTOPT => {
+                if nodes.len() > 0 {
+                    blocks.extend(self.get_elselist(&nodes[0]));
+                }
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_ELSELIST => {
+                // nodes = [<elselist>, <ELSEIF>, <exp>, <THEN>, <block>]
+                if nodes.len() > 4 {
+                    blocks.extend(self.get_elselist(&nodes[0]));
+                    blocks.push((&nodes[2], &nodes[4]));
+                } else {
+                    // nodes = [<ELSEIF>, <exp>, <THEN>, <block>]
+                    blocks.push((&nodes[1], &nodes[3]));
+                }
+            }
+            _ => panic!(
+                "Expected an <elselist> or <elselistopt>, but got {:#?}",
+                elselistopt
+            ),
+        }
+        blocks
+    }
+
+    fn compile_while(&mut self, expr: &'a Node<u8>, block: &'a Node<u8>) {
+        let parent = self.curr_block;
+        // compile expr in a new block, and create a branching instruction to it
+        self.curr_block()
+            .mut_instrs()
+            .push(Instr::OneArg(Jmp, Arg::Some(parent + 1)));
+        let cond_start = self.curr_func().create_block_with_parents(vec![parent]);
+        self.get_block(cond_start).push_dominator(parent);
+        self.curr_block = cond_start;
+        let expr_reg = self.compile_expr(expr);
+        let cond_end = self.curr_block;
+        // compile the while loop block
+        self.compile_while_body(cond_start, cond_end, expr_reg, block, vec![], vec![]);
+    }
+
+    fn compile_while_body(
+        &mut self,
+        while_cond_start: usize,
+        while_cond_end: usize,
+        expr_reg: usize,
+        block: &'a Node<u8>,
+        additional_instrs: Vec<Instr>,
+        reg_map_updates: Vec<(usize, &'a str)>,
+    ) {
+        let while_block = self.compile_block(block);
+        let last_block = self.curr_func().blocks().len();
+        self.get_block(while_cond_end)
+            .mut_instrs()
+            .push(Instr::ThreeArg(
+                JmpNE,
+                Arg::Reg(expr_reg),
+                Arg::Some(while_block),
+                Arg::Some(last_block),
+            ));
+        self.curr_block = last_block - 1;
+        if !self.curr_block().dominators().contains(&while_cond_end) {
+            self.curr_block().push_dominator(while_cond_end);
+        }
+        self.instrs().extend(additional_instrs);
+        for (reg, name) in reg_map_updates {
+            self.curr_block().set_reg_name(reg, name, false);
+        }
+        self.generate_phis(while_cond_end);
+        self.curr_block()
+            .mut_instrs()
+            .push(Instr::OneArg(Jmp, Arg::Some(while_cond_start)));
+        let after_block = self
+            .curr_func()
+            .create_block_with_parents(vec![while_cond_end]);
+        self.curr_block = after_block;
+        self.curr_block().push_dominator(while_cond_end);
+        self.generate_phis(last_block - 1);
+    }
+
+    fn compile_for_count(
+        &mut self,
+        name: VarType<'a>,
+        expr: &'a Node<u8>,
+        exprs: &'a Node<u8>,
+        block: &'a Node<u8>,
+    ) {
+        self.create_child_block();
+        let start_reg = self
+            .compile_assignment(name, expr, AssignmentType::LocalDecl)
+            .get_reg();
+        let exprs = self.get_underlying_exprs(exprs);
+        // [end_reg, step_reg]
+        let mut regs: Vec<usize> = exprs.iter().map(|e| self.compile_expr(e)).collect();
+        if regs.len() > 2 {
+            panic!("Too many expression in for-loop.");
+        } else if regs.len() == 1 {
+            let new_reg = self.curr_func().get_new_reg();
+            self.curr_block()
+                .mut_instrs()
+                .push(Instr::TwoArg(MOV, Arg::Reg(new_reg), Arg::Int(1)));
+            regs.push(new_reg);
+        }
+        // compile while loop condition
+        let while_condition_start = self.create_child_block();
+        let zero_reg = self.curr_func().get_new_reg();
+        self.instrs()
+            .push(Instr::TwoArg(MOV, Arg::Reg(zero_reg), Arg::Int(0)));
+
+        let left_reg =
+            self.get_operand_of_for_count_condition(zero_reg, start_reg, regs[0], regs[1], true);
+        let parent = self.curr_block;
+        self.create_child_block();
+        let right_reg =
+            self.get_operand_of_for_count_condition(zero_reg, start_reg, regs[0], regs[1], false);
+        let condition_reg = self.compile_or_short_circuit2(left_reg, right_reg, parent);
+        let new_reg = self.curr_func().get_new_reg();
+        let additional_instrs = vec![Instr::ThreeArg(
+            ADD,
+            Arg::Reg(new_reg),
+            Arg::Reg(start_reg),
+            Arg::Reg(regs[1]),
+        )];
+        let while_condition_end = self.curr_block;
+        let reg_map_updates = vec![(new_reg, name.get_str())];
+        self.compile_while_body(
+            while_condition_start,
+            while_condition_end,
+            condition_reg,
+            block,
+            additional_instrs,
+            reg_map_updates,
+        );
+    }
+
+    fn get_operand_of_for_count_condition(
+        &mut self,
+        zero_reg: usize,
+        start_reg: usize,
+        end_reg: usize,
+        step_reg: usize,
+        is_left: bool,
+    ) -> usize {
+        let zero_cmp_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::ThreeArg(
+            if is_left { GE } else { LT },
+            Arg::Reg(zero_cmp_reg),
+            Arg::Reg(step_reg),
+            Arg::Reg(zero_reg),
+        ));
+        let end_cmp_reg = self.curr_func().get_new_reg();
+        let right_instrs = vec![Instr::ThreeArg(
+            if is_left { LE } else { GE },
+            Arg::Reg(end_cmp_reg),
+            Arg::Reg(start_reg),
+            Arg::Reg(end_reg),
+        )];
+        self.compile_and_short_circuit2(zero_cmp_reg, right_instrs)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::instr::Arg::*;
+    use super::instr::Instr;
     use super::*;
-    use irgen::register_map::Lifetime;
     use std::fmt::Debug;
 
     fn check_eq<T: Debug + PartialEq>(output: &Vec<T>, expected: &Vec<T>) {
         assert_eq!(output.len(), expected.len());
         for (lhs, rhs) in output.iter().zip(expected.iter()) {
-            assert_eq!(lhs, rhs);
+            assert_eq!(lhs, rhs, "{:?} != {:?}", lhs, rhs);
+        }
+    }
+
+    fn check_instrs_and_parents(
+        ir: &LuaIR,
+        num_of_funcs: usize,
+        expected_instrs: &Vec<Vec<Instr>>,
+        expected_parents: &Vec<Vec<usize>>,
+        expected_dominators: &Vec<Vec<usize>>,
+    ) {
+        assert!(ir.functions.len() == num_of_funcs);
+        for i in 0..ir.functions.len() {
+            let blocks = ir.functions[i].blocks();
+            assert!(
+                blocks.len() == expected_instrs.len(),
+                "len: {}; expected: {}",
+                blocks.len(),
+                expected_instrs.len()
+            );
+            for i in 0..blocks.len() {
+                let block = &blocks[i];
+                check_eq(block.parents(), &expected_parents[i]);
+                check_eq(block.dominators(), &expected_dominators[i]);
+                check_eq(block.instrs(), &expected_instrs[i]);
+            }
         }
     }
 
     #[test]
-    fn correctness_of_ssa_ir() {
+    fn simple_math() {
         let pt = &LuaParseTree::from_str(String::from("x = 1 + 2 * 3 / 2 ^ 2.0 // 1 - 2")).unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
-            HLInstr(Opcode::LDI, 1, 0, 0),
-            HLInstr(Opcode::LDI, 2, 1, 0),
-            HLInstr(Opcode::LDI, 3, 2, 0),
-            HLInstr(Opcode::MUL, 4, 2, 3),
-            HLInstr(Opcode::LDI, 5, 1, 0),
-            HLInstr(Opcode::LDF, 6, 0, 0),
-            HLInstr(Opcode::EXP, 7, 5, 6),
-            HLInstr(Opcode::DIV, 8, 4, 7),
-            HLInstr(Opcode::LDI, 9, 0, 0),
-            HLInstr(Opcode::FDIV, 10, 8, 9),
-            HLInstr(Opcode::ADD, 11, 1, 10),
-            HLInstr(Opcode::LDI, 12, 1, 0),
-            HLInstr(Opcode::SUB, 13, 11, 12),
-            HLInstr(Opcode::LDS, 14, 0, 0),
-            HLInstr(Opcode::SetAttr, 0, 14, 13),
+            Instr::TwoArg(MOV, Reg(0), Int(1)),
+            Instr::TwoArg(MOV, Reg(1), Int(2)),
+            Instr::TwoArg(MOV, Reg(2), Int(3)),
+            Instr::ThreeArg(MUL, Reg(3), Reg(1), Reg(2)),
+            Instr::TwoArg(MOV, Reg(4), Int(2)),
+            Instr::TwoArg(MOV, Reg(5), Float(2.0)),
+            Instr::ThreeArg(EXP, Reg(6), Reg(4), Reg(5)),
+            Instr::ThreeArg(DIV, Reg(7), Reg(3), Reg(6)),
+            Instr::TwoArg(MOV, Reg(8), Int(1)),
+            Instr::ThreeArg(FDIV, Reg(9), Reg(7), Reg(8)),
+            Instr::ThreeArg(ADD, Reg(10), Reg(0), Reg(9)),
+            Instr::TwoArg(MOV, Reg(11), Int(2)),
+            Instr::ThreeArg(SUB, Reg(12), Reg(10), Reg(11)),
+            Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(12)),
         ];
-        let function = &ir.functions[0];
-        check_eq(function.instrs(), &expected_instrs);
-        // check that the IR is in SSA form
-        let mut regs = Vec::with_capacity(function.instrs().len());
-        regs.resize(function.instrs().len(), false);
-        for i in function.instrs() {
-            regs[i.1] = !regs[i.1];
-            // if at any point this assertion fails, it means that a register has been
-            // assigned a value multiple times
-            // SetAttr only updates the state of a register, so it doesn't mess up the
-            // correctness of the SSA
-            if i.0 != Opcode::SetAttr {
-                assert!(regs[i.1]);
-            }
-        }
-        // check lifetimes
-        let expected_lifetimes = vec![
-            Lifetime::with_end_point(0, 15),
-            Lifetime::with_end_point(1, 2),
-            Lifetime::with_end_point(2, 3),
-            Lifetime::with_end_point(3, 4),
-            Lifetime::with_end_point(4, 5),
-            Lifetime::with_end_point(5, 6),
-            Lifetime::with_end_point(6, 7),
-            Lifetime::with_end_point(7, 8),
-            Lifetime::with_end_point(8, 9),
-            Lifetime::with_end_point(9, 10),
-            Lifetime::with_end_point(10, 11),
-            Lifetime::with_end_point(11, 12),
-            Lifetime::with_end_point(12, 13),
-            Lifetime::with_end_point(13, 14),
-            Lifetime::with_end_point(14, 15),
-        ];
-        check_eq(function.lifetimes(), &expected_lifetimes);
-        // check constats map
-        let expected_ints = vec![1, 2, 3];
-        let ints = ir.const_map.get_ints();
-        check_eq(&ints, &expected_ints);
-        let expected_floats = vec![2.0];
-        let floats = ir.const_map.get_floats();
-        check_eq(&floats, &expected_floats);
-        let expected_strings = vec!["x".to_string()];
-        let strings = ir.const_map.get_strings();
-        check_eq(&strings, &expected_strings);
+        assert!(ir.functions.len() == 1);
+        let blocks = &ir.functions[0].blocks();
+        assert!(blocks.len() == 1);
+        check_eq(blocks[0].instrs(), &expected_instrs);
     }
 
     #[test]
-    fn correctness_of_ssa_ir2() {
+    fn global_assignment() {
         let pt = &LuaParseTree::from_str(String::from(
             "x = 1
              y = x",
@@ -815,57 +1448,15 @@ mod tests {
         .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
-            HLInstr(Opcode::LDI, 1, 0, 0),     // R(1) = INT(0) == 1
-            HLInstr(Opcode::LDS, 2, 0, 0),     // R(2) = STR(0) == "x"
-            HLInstr(Opcode::SetAttr, 0, 2, 1), // _ENV["x"] = R(1); x = 1
-            HLInstr(Opcode::GetAttr, 3, 0, 2), // R(3) = _ENV["x"]
-            HLInstr(Opcode::LDS, 4, 1, 0),     // R(4) = STR(1) == "y"
-            HLInstr(Opcode::SetAttr, 0, 4, 3), // _ENV["y"] = R(4); y = x
+            Instr::TwoArg(MOV, Reg(0), Int(1)),
+            Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(0)),
+            Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("x".to_string())),
+            Instr::ThreeArg(SetUpAttr, Some(0), Str("y".to_string()), Reg(1)),
         ];
-        let function = &ir.functions[ir.main_func];
-        check_eq(function.instrs(), &expected_instrs);
-        // check that the IR is in SSA form
-        let mut regs = Vec::with_capacity(function.instrs().len());
-        regs.resize(function.instrs().len(), false);
-        for i in function.instrs() {
-            regs[i.1] = !regs[i.1];
-            // if at any point this assertion fails, it means that a register has been
-            // assigned a value multiple times
-            if i.0 != Opcode::SetAttr {
-                assert!(regs[i.1]);
-            }
-        }
-        // check lifetimes
-        let expected_lifetimes = vec![
-            Lifetime::with_end_point(0, 5),
-            Lifetime::with_end_point(1, 2),
-            Lifetime::with_end_point(2, 4),
-            Lifetime::with_end_point(3, 4),
-            Lifetime::with_end_point(4, 5),
-        ];
-        check_eq(function.lifetimes(), &expected_lifetimes);
-        // check constats map
-        let expected_ints = vec![1];
-        let ints = ir.const_map.get_ints();
-        check_eq(&ints, &expected_ints);
-        assert!(ir.const_map.get_floats().is_empty());
-        let expected_strings = vec!["x".to_string(), "y".to_string()];
-        let strings = ir.const_map.get_strings();
-        check_eq(&strings, &expected_strings);
-    }
-
-    #[test]
-    fn generates_get_attr_instr() {
-        let pt = &LuaParseTree::from_str(String::from("x = y")).unwrap();
-        let ir = compile_to_ir(pt);
-        let expected_instrs = vec![
-            HLInstr(Opcode::LDS, 1, 0, 0),
-            HLInstr(Opcode::GetAttr, 2, 0, 1),
-            HLInstr(Opcode::LDS, 3, 1, 0),
-            HLInstr(Opcode::SetAttr, 0, 3, 2),
-        ];
-        let function = &ir.functions[0];
-        check_eq(function.instrs(), &expected_instrs);
+        assert!(ir.functions.len() == 1);
+        let blocks = &ir.functions[ir.main_func].blocks();
+        assert!(blocks.len() == 1);
+        check_eq(blocks[0].instrs(), &expected_instrs);
     }
 
     #[test]
@@ -877,41 +1468,13 @@ mod tests {
         .unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
-            HLInstr(Opcode::LDI, 1, 0, 0),
-            HLInstr(Opcode::LDS, 2, 0, 0),
-            HLInstr(Opcode::SetAttr, 0, 2, 1),
+            Instr::TwoArg(MOV, Reg(0), Int(2)),
+            Instr::ThreeArg(SetUpAttr, Some(0), Str("y".to_string()), Reg(0)),
         ];
-        let function = &ir.functions[0];
-        check_eq(function.instrs(), &expected_instrs);
-    }
-
-    #[test]
-    fn load_string_multiple_times() {
-        let pt = &LuaParseTree::from_str(String::from(
-            "local x = \"1\"
-             local y = \"1\"",
-        ))
-        .unwrap();
-        let ir = compile_to_ir(pt);
-        let expected_instrs = vec![HLInstr(Opcode::LDS, 1, 0, 0), HLInstr(Opcode::MOV, 2, 1, 0)];
-        let function = &ir.functions[ir.main_func];
-        check_eq(function.instrs(), &expected_instrs);
-        let pt = &LuaParseTree::from_str(String::from(
-            "x = \"1\"
-             y = \"x\"",
-        ))
-        .unwrap();
-        let ir = compile_to_ir(pt);
-        let expected_instrs = vec![
-            HLInstr(Opcode::LDS, 1, 0, 0),     // R(1) = "1"
-            HLInstr(Opcode::LDS, 2, 1, 0),     // R(2) = "x"
-            HLInstr(Opcode::SetAttr, 0, 2, 1), // _ENV["x"] = "1"
-            HLInstr(Opcode::LDS, 3, 2, 0),     // R(3) = "y"
-            // notice that it is reusing register 2!
-            HLInstr(Opcode::SetAttr, 0, 3, 2), // _ENV["y"] = "x"
-        ];
-        let function = &ir.functions[ir.main_func];
-        check_eq(function.instrs(), &expected_instrs);
+        assert!(ir.functions.len() == 1);
+        let blocks = &ir.functions[0].blocks();
+        assert!(blocks.len() == 1);
+        check_eq(blocks[0].instrs(), &expected_instrs);
     }
 
     #[test]
@@ -925,18 +1488,19 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                HLInstr(Opcode::CLOSURE, 1, 0, 0),
-                HLInstr(Opcode::LDS, 2, 1, 0),
-                HLInstr(Opcode::SetAttr, 0, 2, 1),
+                Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
             ],
             vec![
-                HLInstr(Opcode::LDI, 1, 0, 0),
-                HLInstr(Opcode::LDS, 2, 0, 0),
-                HLInstr(Opcode::SetAttr, 0, 2, 1),
+                Instr::TwoArg(MOV, Reg(0), Int(3)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(0)),
             ],
         ];
+        assert!(ir.functions.len() == 2);
         for i in 0..ir.functions.len() {
-            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+            let blocks = &ir.functions[i].blocks();
+            assert!(blocks.len() == 1);
+            check_eq(blocks[0].instrs(), &expected_instrs[i])
         }
     }
 
@@ -953,24 +1517,25 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                HLInstr(Opcode::CLOSURE, 1, 0, 0),
-                HLInstr(Opcode::LDS, 2, 1, 0),
-                HLInstr(Opcode::SetAttr, 0, 2, 1),
-                HLInstr(Opcode::GetAttr, 3, 0, 2),
-                HLInstr(Opcode::SetTop, 3, 0, 0),
-                HLInstr(Opcode::CALL, 3, 0, 0),
-                HLInstr(Opcode::GetAttr, 4, 0, 2),
-                HLInstr(Opcode::SetTop, 4, 0, 0),
-                HLInstr(Opcode::CALL, 4, 0, 0),
+                Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("f".to_string())),
+                Instr::OneArg(SetTop, Reg(1)),
+                Instr::OneArg(CALL, Reg(1)),
+                Instr::ThreeArg(GetUpAttr, Reg(2), Some(0), Str("f".to_string())),
+                Instr::OneArg(SetTop, Reg(2)),
+                Instr::OneArg(CALL, Reg(2)),
             ],
             vec![
-                HLInstr(Opcode::LDI, 1, 0, 0),
-                HLInstr(Opcode::LDS, 2, 0, 0),
-                HLInstr(Opcode::SetAttr, 0, 2, 1),
+                Instr::TwoArg(MOV, Reg(0), Int(3)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(0)),
             ],
         ];
+        assert!(ir.functions.len() == 2);
         for i in 0..ir.functions.len() {
-            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+            let blocks = &ir.functions[i].blocks();
+            assert!(blocks.len() == 1);
+            check_eq(blocks[0].instrs(), &expected_instrs[i])
         }
     }
 
@@ -987,28 +1552,31 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                HLInstr(Opcode::CLOSURE, 1, 0, 0),
-                HLInstr(Opcode::LDS, 2, 1, 0),
-                HLInstr(Opcode::SetAttr, 0, 2, 1),
-                HLInstr(Opcode::GetAttr, 3, 0, 2),
-                HLInstr(Opcode::SetTop, 3, 0, 0),
-                HLInstr(Opcode::LDI, 4, 0, 0),
-                HLInstr(Opcode::PUSH, 4, 0, 0),
-                HLInstr(Opcode::CALL, 3, 1, 0),
-                HLInstr(Opcode::GetAttr, 5, 0, 2),
-                HLInstr(Opcode::SetTop, 5, 0, 0),
-                HLInstr(Opcode::LDS, 6, 0, 0),
-                HLInstr(Opcode::GetAttr, 7, 0, 6),
-                HLInstr(Opcode::PUSH, 7, 0, 0),
-                HLInstr(Opcode::CALL, 5, 1, 0),
+                Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("f".to_string())),
+                Instr::OneArg(SetTop, Reg(1)),
+                Instr::TwoArg(MOV, Reg(2), Int(2)),
+                Instr::OneArg(PUSH, Reg(2)),
+                Instr::OneArg(CALL, Reg(1)),
+                Instr::ThreeArg(GetUpAttr, Reg(3), Some(0), Str("f".to_string())),
+                Instr::OneArg(SetTop, Reg(3)),
+                Instr::ThreeArg(GetUpAttr, Reg(4), Some(0), Str("x".to_string())),
+                Instr::OneArg(PUSH, Reg(4)),
+                Instr::OneArg(CALL, Reg(3)),
             ],
-            vec![
-                HLInstr(Opcode::LDS, 2, 0, 0),
-                HLInstr(Opcode::SetAttr, 0, 2, 1),
-            ],
+            vec![Instr::ThreeArg(
+                SetUpAttr,
+                Some(0),
+                Str("x".to_string()),
+                Reg(0),
+            )],
         ];
+        assert!(ir.functions.len() == 2);
         for i in 0..ir.functions.len() {
-            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+            let blocks = &ir.functions[i].blocks();
+            assert!(blocks.len() == 1);
+            check_eq(blocks[0].instrs(), &expected_instrs[i])
         }
     }
 
@@ -1021,23 +1589,24 @@ mod tests {
         ))
         .unwrap();
         let ir = compile_to_ir(pt);
-        let expected_instrs = vec![vec![
-            HLInstr(Opcode::LDI, 1, 0, 0), // x = 1
-            HLInstr(Opcode::LDI, 2, 1, 0), // y = 3
-            // z and z2 are skipped, but a register is allocated for them
-            HLInstr(Opcode::LDI, 5, 0, 0),       // x = 1
-            HLInstr(Opcode::LDI, 6, 2, 0),       // y = 4
-            HLInstr(Opcode::LDI, 7, 3, 0),       // z = 5
-            HLInstr(Opcode::LDI, 8, 4, 0),       // load 6
-            HLInstr(Opcode::LDI, 9, 0, 0),       // a = 1
-            HLInstr(Opcode::LDS, 11, 0, 0),      // load "a"
-            HLInstr(Opcode::SetAttr, 0, 11, 9),  // _ENV["a"] = 1
-            HLInstr(Opcode::LDS, 12, 1, 0),      // load "b"
-            HLInstr(Opcode::SetAttr, 0, 12, 10), // _ENV["b"] = Nil
-        ]];
-        for i in 0..ir.functions.len() {
-            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
-        }
+        let expected_instrs = vec![
+            Instr::TwoArg(MOV, Reg(0), Int(1)),
+            Instr::TwoArg(MOV, Reg(1), Int(3)),
+            Instr::TwoArg(MOV, Reg(2), Nil),
+            Instr::TwoArg(MOV, Reg(3), Nil),
+            Instr::TwoArg(MOV, Reg(4), Int(1)),
+            Instr::TwoArg(MOV, Reg(5), Int(4)),
+            Instr::TwoArg(MOV, Reg(6), Int(5)),
+            Instr::TwoArg(MOV, Reg(7), Int(6)),
+            Instr::TwoArg(MOV, Reg(8), Int(1)),
+            Instr::TwoArg(MOV, Reg(9), Nil),
+            Instr::ThreeArg(SetUpAttr, Some(0), Str("a".to_string()), Reg(8)),
+            Instr::ThreeArg(SetUpAttr, Some(0), Str("b".to_string()), Reg(9)),
+        ];
+        assert!(ir.functions.len() == 1);
+        let blocks = &ir.functions[0].blocks();
+        assert!(blocks.len() == 1);
+        check_eq(blocks[0].instrs(), &expected_instrs);
     }
 
     #[test]
@@ -1053,34 +1622,35 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                HLInstr(Opcode::CLOSURE, 1, 0, 0), // function f...
-                HLInstr(Opcode::LDS, 2, 0, 0),
-                HLInstr(Opcode::SetAttr, 0, 2, 1), // _ENV["f"] = 1
-                HLInstr(Opcode::GetAttr, 3, 0, 2), // load reference to f
-                HLInstr(Opcode::SetTop, 3, 0, 0),
-                HLInstr(Opcode::LDI, 4, 0, 0), // 1
-                HLInstr(Opcode::PUSH, 4, 0, 0),
-                HLInstr(Opcode::LDI, 5, 1, 0), // 2
-                HLInstr(Opcode::PUSH, 5, 0, 0),
-                HLInstr(Opcode::LDI, 6, 2, 0), // 3
-                HLInstr(Opcode::PUSH, 6, 0, 0),
-                HLInstr(Opcode::LDI, 7, 3, 0), // 4
-                HLInstr(Opcode::PUSH, 7, 0, 0),
-                HLInstr(Opcode::CALL, 3, 4, 0), // call f with 4 arguments
+                Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("f".to_string())),
+                Instr::OneArg(SetTop, Reg(1)),
+                Instr::TwoArg(MOV, Reg(2), Int(1)),
+                Instr::OneArg(PUSH, Reg(2)),
+                Instr::TwoArg(MOV, Reg(3), Int(2)),
+                Instr::OneArg(PUSH, Reg(3)),
+                Instr::TwoArg(MOV, Reg(4), Int(3)),
+                Instr::OneArg(PUSH, Reg(4)),
+                Instr::TwoArg(MOV, Reg(5), Int(4)),
+                Instr::OneArg(PUSH, Reg(5)),
+                Instr::OneArg(CALL, Reg(1)),
             ],
             vec![
-                HLInstr(Opcode::MOV, 3, 1, 0),    // x = a
-                HLInstr(Opcode::VarArg, 4, 2, 0), // y, z = ...
-                // next register is 6, as VarArg will assign to 4 and 5
-                HLInstr(Opcode::LDS, 6, 0, 0),     // "f"
-                HLInstr(Opcode::GetAttr, 7, 0, 6), // load reference to f
-                HLInstr(Opcode::SetTop, 7, 0, 0),
-                HLInstr(Opcode::VarArg, 0, 0, 1), // push all varargs
-                HLInstr(Opcode::CALL, 7, 1, 0),   // f(...)
+                Instr::TwoArg(MOV, Reg(2), Reg(0)),
+                Instr::TwoArg(VarArg, Reg(3), Some(0)),
+                Instr::TwoArg(VarArg, Reg(4), Some(1)),
+                Instr::ThreeArg(GetUpAttr, Reg(5), Some(0), Str("f".to_string())),
+                Instr::OneArg(SetTop, Reg(5)),
+                Instr::OneArg(VarArg, Some(1)),
+                Instr::OneArg(CALL, Reg(5)),
             ],
         ];
+        assert!(ir.functions.len() == 2);
         for i in 0..ir.functions.len() {
-            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+            let blocks = &ir.functions[i].blocks();
+            assert!(blocks.len() == 1);
+            check_eq(blocks[0].instrs(), &expected_instrs[i])
         }
     }
 
@@ -1096,33 +1666,532 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             vec![
-                HLInstr(Opcode::CLOSURE, 1, 0, 0), // function f...
-                HLInstr(Opcode::LDS, 2, 3, 0),
-                HLInstr(Opcode::SetAttr, 0, 2, 1), // _ENV["f"] = 1
-                HLInstr(Opcode::GetAttr, 3, 0, 2), // load reference to f
-                HLInstr(Opcode::SetTop, 3, 0, 0),
-                HLInstr(Opcode::LDI, 4, 0, 0), // 1
-                HLInstr(Opcode::PUSH, 4, 0, 0),
-                HLInstr(Opcode::LDI, 5, 1, 0), // 2
-                HLInstr(Opcode::PUSH, 5, 0, 0),
-                HLInstr(Opcode::LDI, 6, 2, 0), // 3
-                HLInstr(Opcode::PUSH, 6, 0, 0),
-                HLInstr(Opcode::LDI, 7, 3, 0), // 4
-                HLInstr(Opcode::PUSH, 7, 0, 0),
-                HLInstr(Opcode::CALL, 3, 4, 0), // call f with 4 arguments
+                Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("f".to_string())),
+                Instr::OneArg(SetTop, Reg(1)),
+                Instr::TwoArg(MOV, Reg(2), Int(1)),
+                Instr::OneArg(PUSH, Reg(2)),
+                Instr::TwoArg(MOV, Reg(3), Int(2)),
+                Instr::OneArg(PUSH, Reg(3)),
+                Instr::TwoArg(MOV, Reg(4), Int(3)),
+                Instr::OneArg(PUSH, Reg(4)),
+                Instr::TwoArg(MOV, Reg(5), Int(4)),
+                Instr::OneArg(PUSH, Reg(5)),
+                Instr::OneArg(CALL, Reg(1)),
             ],
             vec![
-                HLInstr(Opcode::VarArg, 3, 2, 0), // copy 2 args from vararg into reg 4,5
-                HLInstr(Opcode::LDS, 5, 0, 0),    // load "x"
-                HLInstr(Opcode::SetAttr, 0, 5, 1), // _ENV["x"] = a
-                HLInstr(Opcode::LDS, 6, 1, 0),    // load "y"
-                HLInstr(Opcode::SetAttr, 0, 6, 3), // _ENV["y"] = nil
-                HLInstr(Opcode::LDS, 7, 2, 0),    // load "z"
-                HLInstr(Opcode::SetAttr, 0, 7, 4), // _ENV["z"] = nil
+                Instr::TwoArg(VarArg, Reg(2), Some(0)),
+                Instr::TwoArg(VarArg, Reg(3), Some(1)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("y".to_string()), Reg(2)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("z".to_string()), Reg(3)),
             ],
         ];
+        assert!(ir.functions.len() == 2);
         for i in 0..ir.functions.len() {
-            check_eq(ir.functions[i].instrs(), &expected_instrs[i])
+            let blocks = &ir.functions[i].blocks();
+            assert!(blocks.len() == 1);
+            check_eq(blocks[0].instrs(), &expected_instrs[i])
+        }
+    }
+
+    #[test]
+    fn generate_return() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "function f(a, b, ...)
+                 return a, ...
+             end
+             f(1, f(5))",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("f".to_string())),
+                Instr::OneArg(SetTop, Reg(1)),
+                Instr::TwoArg(MOV, Reg(2), Int(1)),
+                Instr::OneArg(PUSH, Reg(2)),
+                Instr::ThreeArg(GetUpAttr, Reg(3), Some(0), Str("f".to_string())),
+                Instr::OneArg(SetTop, Reg(3)),
+                Instr::TwoArg(MOV, Reg(4), Int(5)),
+                Instr::OneArg(PUSH, Reg(4)),
+                Instr::OneArg(CALL, Reg(3)),
+                Instr::OneArg(MOVR, Some(1)),
+                Instr::OneArg(CALL, Reg(1)),
+            ],
+            vec![
+                Instr::ThreeArg(PUSH, Reg(0), Some(0), Some(1)),
+                Instr::OneArg(VarArg, Some(2)),
+                Instr::ZeroArg(RET),
+            ],
+        ];
+        assert!(ir.functions.len() == 2);
+        for i in 0..ir.functions.len() {
+            let blocks = &ir.functions[i].blocks();
+            assert!(blocks.len() == 1);
+            check_eq(blocks[0].instrs(), &expected_instrs[i])
+        }
+    }
+
+    #[test]
+    fn simple_if_else() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a = 1
+             if a then
+               local b = 2
+             else
+               local c = 2
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(1)),
+                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(1), Int(2)),
+                Instr::OneArg(Jmp, Some(3)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(2), Int(2)),
+                Instr::OneArg(Jmp, Some(3)),
+            ],
+            vec![],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![0], vec![1, 2]];
+        let expected_dominators = vec![vec![], vec![0], vec![0], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn simple_if() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a = 1
+             if a then
+               local b = 2
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(1)),
+                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(1), Int(2)),
+                Instr::OneArg(Jmp, Some(2)),
+            ],
+            vec![],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![0, 1]];
+        let expected_dominators = vec![vec![], vec![0], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn multiple_ifelse() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a, b, c
+             if a then
+               b = 2
+             elseif b then
+               b = 3
+             elseif c then
+               b = 4
+             else
+               b = 5
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Nil),
+                Instr::TwoArg(MOV, Reg(1), Nil),
+                Instr::TwoArg(MOV, Reg(2), Nil),
+                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(3), Int(2)),
+                Instr::OneArg(Jmp, Some(7)),
+            ],
+            vec![Instr::ThreeArg(JmpNE, Reg(1), Some(3), Some(4))],
+            vec![
+                Instr::TwoArg(MOV, Reg(4), Int(3)),
+                Instr::OneArg(Jmp, Some(7)),
+            ],
+            vec![Instr::ThreeArg(JmpNE, Reg(2), Some(5), Some(6))],
+            vec![
+                Instr::TwoArg(MOV, Reg(5), Int(4)),
+                Instr::OneArg(Jmp, Some(7)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(6), Int(5)),
+                Instr::OneArg(Jmp, Some(7)),
+            ],
+            vec![Instr::NArg(
+                Phi,
+                vec![Reg(7), Reg(1), Reg(3), Reg(4), Reg(5), Reg(6)],
+            )],
+        ];
+        let expected_parents = vec![
+            vec![],
+            vec![0],
+            vec![0],
+            vec![2],
+            vec![2],
+            vec![4],
+            vec![4],
+            vec![1, 3, 5, 6],
+        ];
+        let expected_dominators = vec![
+            vec![],
+            vec![0],
+            vec![0],
+            vec![2],
+            vec![2],
+            vec![4],
+            vec![4],
+            vec![0],
+        ];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn ifelse_without_else() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a, b
+             if a then
+               b = 2
+             elseif b then
+               b = 3
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Nil),
+                Instr::TwoArg(MOV, Reg(1), Nil),
+                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(2), Int(2)),
+                Instr::OneArg(Jmp, Some(4)),
+            ],
+            vec![Instr::ThreeArg(JmpNE, Reg(1), Some(3), Some(4))],
+            vec![
+                Instr::TwoArg(MOV, Reg(3), Int(3)),
+                Instr::OneArg(Jmp, Some(4)),
+            ],
+            vec![Instr::NArg(Phi, vec![Reg(4), Reg(1), Reg(2), Reg(3)])],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![0], vec![2], vec![2, 1, 3]];
+        let expected_dominators = vec![vec![], vec![0], vec![0], vec![2], vec![2]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn nested_ifs() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a, b
+             if a then
+               b = 2
+               if b then
+                 local c = 3
+               end
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Nil),
+                Instr::TwoArg(MOV, Reg(1), Nil),
+                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(4)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(2), Int(2)),
+                Instr::ThreeArg(JmpNE, Reg(2), Some(2), Some(3)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(3), Int(3)),
+                Instr::OneArg(Jmp, Some(3)),
+            ],
+            vec![
+                Instr::NArg(Phi, vec![Reg(4), Reg(2)]),
+                Instr::OneArg(Jmp, Some(4)),
+            ],
+            vec![Instr::NArg(Phi, vec![Reg(5), Reg(1), Reg(4)])],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![1], vec![1, 2], vec![0, 3]];
+        let expected_dominators = vec![vec![], vec![0], vec![1], vec![1], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn nested_ifs_with_else() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a, b
+             if a then
+               b = 2
+               if b then
+                 local c = 3
+               else
+                 local d = 4
+               end
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Nil),
+                Instr::TwoArg(MOV, Reg(1), Nil),
+                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(5)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(2), Int(2)),
+                Instr::ThreeArg(JmpNE, Reg(2), Some(2), Some(3)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(3), Int(3)),
+                Instr::OneArg(Jmp, Some(4)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(4), Int(4)),
+                Instr::OneArg(Jmp, Some(4)),
+            ],
+            vec![
+                Instr::NArg(Phi, vec![Reg(5), Reg(2)]),
+                Instr::OneArg(Jmp, Some(5)),
+            ],
+            vec![Instr::NArg(Phi, vec![Reg(6), Reg(1), Reg(5)])],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![1], vec![1], vec![2, 3], vec![0, 4]];
+        let expected_dominators = vec![vec![], vec![0], vec![1], vec![1], vec![1], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn while_loop() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a, b = 2, 1
+             while a do
+                 b = b + 1
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(2)),
+                Instr::TwoArg(MOV, Reg(1), Int(1)),
+                Instr::OneArg(Jmp, Some(1)),
+            ],
+            vec![Instr::ThreeArg(JmpNE, Reg(0), Some(2), Some(3))],
+            vec![
+                Instr::TwoArg(MOV, Reg(2), Int(1)),
+                Instr::ThreeArg(ADD, Reg(3), Reg(1), Reg(2)),
+                Instr::NArg(Phi, vec![Reg(4), Reg(1), Reg(3)]),
+                Instr::OneArg(Jmp, Some(1)),
+            ],
+            vec![Instr::NArg(Phi, vec![Reg(5), Reg(4)])],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![1], vec![1]];
+        let expected_dominators = vec![vec![], vec![0], vec![1], vec![1]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn or_short_circuit() {
+        let pt = &LuaParseTree::from_str(String::from("local a = 0 or 1")).unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(0)),
+                Instr::ThreeArg(JmpEQ, Reg(0), Some(2), Some(1)),
+            ],
+            vec![Instr::TwoArg(MOV, Reg(1), Int(1))],
+            vec![Instr::NArg(Phi, vec![Reg(2), Reg(0), Reg(1)])],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![0]];
+        let expected_dominators = vec![vec![], vec![0], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn and_short_circuit() {
+        let pt = &LuaParseTree::from_str(String::from("local a = 0 and 1")).unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(0)),
+                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+            ],
+            vec![Instr::TwoArg(MOV, Reg(1), Int(1))],
+            vec![Instr::NArg(Phi, vec![Reg(2), Reg(0), Reg(1)])],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![0]];
+        let expected_dominators = vec![vec![], vec![0], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn multiple_prefix_assignments() {
+        let pt = &LuaParseTree::from_str(String::from("a[1][2], b, c[3].d = 5, 6")).unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![vec![
+            Instr::ThreeArg(GetUpAttr, Reg(0), Some(0), Str("a".to_string())),
+            Instr::TwoArg(MOV, Reg(1), Int(1)),
+            Instr::ThreeArg(GetAttr, Reg(2), Reg(0), Reg(1)),
+            Instr::TwoArg(MOV, Reg(3), Int(2)),
+            Instr::TwoArg(MOV, Reg(4), Int(5)),
+            Instr::TwoArg(MOV, Reg(5), Int(6)),
+            Instr::ThreeArg(GetUpAttr, Reg(6), Some(0), Str("c".to_string())),
+            Instr::TwoArg(MOV, Reg(7), Int(3)),
+            Instr::ThreeArg(GetAttr, Reg(8), Reg(6), Reg(7)),
+            Instr::TwoArg(MOV, Reg(9), Str("d".to_string())),
+            Instr::TwoArg(MOV, Reg(10), Nil),
+            Instr::ThreeArg(SetUpAttr, Some(0), Str("b".to_string()), Reg(5)),
+            Instr::ThreeArg(SetAttr, Reg(8), Reg(9), Reg(10)),
+        ]];
+        let expected_parents = vec![vec![]];
+        let expected_dominators = vec![vec![]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
+    }
+
+    #[test]
+    fn upvals() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a = 2
+             function f()
+               a = 3
+               x = 2
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(2)),
+                Instr::TwoArg(CLOSURE, Reg(1), Func(1)),
+                Instr::ThreeArg(MovUp, Reg(1), Some(1), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(1)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(3)),
+                Instr::TwoArg(SetUpVal, Some(1), Reg(0)),
+                Instr::TwoArg(MOV, Reg(1), Int(2)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(1)),
+            ],
+        ];
+        for (i, f) in ir.functions.iter().enumerate() {
+            check_eq(f.get_block(0).instrs(), &expected_instrs[i])
+        }
+    }
+
+    #[test]
+    fn upvals2() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a = 2
+             function f()
+               local b = 3
+               function g()
+                 local c = a + b
+               end
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(2)),
+                Instr::TwoArg(CLOSURE, Reg(1), Func(1)),
+                Instr::ThreeArg(MovUp, Reg(1), Some(1), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(1)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(3)),
+                Instr::TwoArg(CLOSURE, Reg(1), Func(2)),
+                Instr::ThreeArg(MovUpFromUp, Reg(1), Some(1), Some(1)),
+                Instr::ThreeArg(MovUp, Reg(1), Some(2), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Some(0), Str("g".to_string()), Reg(1)),
+            ],
+            vec![
+                Instr::TwoArg(GetUpVal, Reg(0), Some(1)),
+                Instr::TwoArg(GetUpVal, Reg(1), Some(2)),
+                Instr::ThreeArg(ADD, Reg(2), Reg(0), Reg(1)),
+            ],
+        ];
+        for (i, f) in ir.functions.iter().enumerate() {
+            check_eq(f.get_block(0).instrs(), &expected_instrs[i])
         }
     }
 }

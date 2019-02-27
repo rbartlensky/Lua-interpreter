@@ -1,3 +1,4 @@
+use cfgrammar::RIdx;
 use lrpar::Node::{self, *};
 
 /// Get the children of the given node if its ridx is equal to <ridx>.
@@ -11,6 +12,17 @@ pub fn get_nodes(node: &Node<u8>, ridx: u8) -> &Vec<Node<u8>> {
             "Expected a Nonterm node with id {}, but got {:#?}",
             ridx, node
         ),
+    }
+}
+
+/// Check if <node> is a term, and has the token id equal to <id>.
+pub fn is_nonterm(node: &Node<u8>, id: u8) -> bool {
+    match *node {
+        Nonterm {
+            ridx: RIdx(ridx),
+            nodes: _,
+        } if ridx == id => true,
+        _ => false,
     }
 }
 
