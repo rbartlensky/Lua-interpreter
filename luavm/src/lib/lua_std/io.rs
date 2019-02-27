@@ -20,8 +20,8 @@ pub fn get_io_module() -> (String, LuaVal) {
 }
 
 pub fn lua_write(vm: &mut Vm) -> Result<(), LuaError> {
-    let args_start = vm.closure.args_start();
-    let args_count = vm.closure.args_count();
+    let args_start = vm.stack_frames.last().unwrap().top;
+    let args_count = vm.top - args_start;
     let mut s = String::new();
     for i in args_start..(args_start + args_count - 1) {
         write!(s, "{}\t", &vm.stack[i]).unwrap();

@@ -34,8 +34,8 @@ impl StdFunction {
 }
 
 pub fn lua_print(vm: &mut Vm) -> Result<(), LuaError> {
-    let args_start = vm.closure.args_start();
-    let args_count = vm.closure.args_count();
+    let args_start = vm.stack_frames.last().unwrap().top;
+    let args_count = vm.top - args_start;
     let mut s = String::new();
     for i in args_start..(args_start + args_count - 1) {
         write!(s, "{}\t", &vm.stack[i]).unwrap();
@@ -45,8 +45,8 @@ pub fn lua_print(vm: &mut Vm) -> Result<(), LuaError> {
 }
 
 pub fn lua_assert(vm: &mut Vm) -> Result<(), LuaError> {
-    let args_start = vm.closure.args_start();
-    let args_count = vm.closure.args_count();
+    let args_start = vm.stack_frames.last().unwrap().top;
+    let args_count = vm.top - args_start;
     if args_count == 0 {
         return Err(LuaError::Error(
             "assert expects at least one argument!".to_string(),
@@ -57,7 +57,7 @@ pub fn lua_assert(vm: &mut Vm) -> Result<(), LuaError> {
             let val = vm.stack[i].clone();
             vm.stack.push(val);
         }
-        vm.closure.set_ret_vals(args_count);
+        vm.closure().set_ret_vals(args_count);
         Ok(())
     } else {
         let message = if args_count > 1 {
@@ -70,8 +70,8 @@ pub fn lua_assert(vm: &mut Vm) -> Result<(), LuaError> {
 }
 
 pub fn lua_tonumber(vm: &mut Vm) -> Result<(), LuaError> {
-    let args_start = vm.closure.args_start();
-    let args_count = vm.closure.args_count();
+    let args_start = vm.stack_frames.last().unwrap().top;
+    let args_count = vm.top - args_start;
     if args_count == 0 {
         Err(LuaError::Error(
             "tonumber expects at least one argument!".to_string(),
@@ -80,7 +80,7 @@ pub fn lua_tonumber(vm: &mut Vm) -> Result<(), LuaError> {
         let val = vm.stack[args_start].clone();
         if val.is_number() {
             vm.stack.push(val);
-            vm.closure.set_ret_vals(1);
+            vm.closure().set_ret_vals(1);
             Ok(())
         } else {
             if let Ok(num) = val.to_int() {
@@ -90,7 +90,7 @@ pub fn lua_tonumber(vm: &mut Vm) -> Result<(), LuaError> {
             } else {
                 vm.stack.push(LuaVal::new());
             }
-            vm.closure.set_ret_vals(1);
+            vm.closure().set_ret_vals(1);
             Ok(())
         }
     } else {

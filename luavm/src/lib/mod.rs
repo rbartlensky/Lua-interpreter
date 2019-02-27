@@ -67,19 +67,25 @@ const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
     jmp_eq,
 ];
 
+pub struct StackFrame {
+    pub closure: Gc<Box<LuaClosure>>,
+    pub top: usize,
+}
+
 /// Represents a `LuaBytecode` interpreter.
 pub struct Vm {
     pub bytecode: LuaBytecode,
     pub registers: Vec<LuaVal>,
     pub stack: Vec<LuaVal>,
     pub top: usize,
+    pub stack_frames: Vec<StackFrame>,
+    pub curr_frame: usize,
     /// All attributes of _ENV that are also part of the string constant table are stored
     /// in a vector. Let's consider an example: "x" is mapped to index 2 in the constant
     /// table. This means that _ENV["x"] = <val> will modify env_attrs[2]. If however
     /// "x" was not in the constant table, then the lookup of the attribute would be
     /// done via the `get_attr` method of the `LuaTable` struct.
     pub env: Gc<LuaVal>,
-    pub closure: Gc<Box<LuaClosure>>,
     pub pc: usize,
 }
 
@@ -113,13 +119,16 @@ impl Vm {
             ));
             Gc::new(boxed)
         };
+        let mut stack_frames = Vec::with_capacity(255);
+        stack_frames.push(StackFrame { closure, top: 0 });
         Vm {
             bytecode,
             registers,
             stack: vec![],
             top: 0,
+            stack_frames,
+            curr_frame: 0,
             env,
-            closure,
             pc: 0,
         }
     }
@@ -156,18 +165,17 @@ impl Vm {
             .unwrap();
     }
 
+    pub fn closure(&mut self) -> &mut Gc<Box<LuaClosure>> {
+        &mut self.stack_frames[self.curr_frame].closure
+    }
+
     /// Evaluate the program.
     pub fn eval(&mut self) -> Result<(), LuaError> {
         self.pc = 0;
-        let len = self
-            .bytecode
-            .get_function(self.closure.index())
-            .instrs_len();
+        let index = self.closure().index();
+        let len = self.bytecode.get_function(index).instrs_len();
         while self.pc < len {
-            let instr = self
-                .bytecode
-                .get_function(self.closure.index())
-                .get_instr(self.pc);
+            let instr = self.bytecode.get_function(index).get_instr(self.pc);
             (OPCODE_HANDLER[opcode(instr) as usize])(self, instr)?;
             self.pc += 1;
         }
