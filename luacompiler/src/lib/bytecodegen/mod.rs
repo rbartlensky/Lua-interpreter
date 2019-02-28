@@ -1,11 +1,19 @@
 pub mod constants_map;
 
 use self::constants_map::ConstantsMap;
-use bytecode::{instructions::*, Function, LuaBytecode};
+use bytecode::{instructions::*, BCProviderType, Function, LuaBytecode};
 use irgen::instr::{Arg, Instr};
 use irgen::lua_ir::LuaIR;
 use irgen::opcodes::IROpcode::*;
 use std::collections::HashMap;
+
+pub fn fit_in_u8(v: usize) -> u8 {
+    if v <= u8::max_value() as usize {
+        v as u8
+    } else {
+        panic!("Value {} does not fit in a u8!", v)
+    }
+}
 
 pub fn compile_to_bytecode(ir: LuaIR) -> LuaBytecode {
     LuaIRToLuaBc::new(ir).compile()
@@ -33,7 +41,7 @@ impl<'a> LuaIRToLuaBc<'a> {
         self.ir.substitute_phis();
         let mut functions = vec![];
         for i in 0..self.ir.functions.len() {
-            assert!(self.ir.functions[i].reg_count() < 255);
+            assert!(self.ir.functions[i].reg_count() <= u8::max_value() as usize);
             functions.push(self.compile_function(i));
         }
         LuaBytecode::new(functions, self.ir.main_func, self.const_map)
@@ -57,8 +65,27 @@ impl<'a> LuaIRToLuaBc<'a> {
         }
         self.branches.clear();
         self.blocks.clear();
+        let provides: HashMap<u8, Vec<(BCProviderType, u8)>> = self.ir.functions[i]
+            .provides()
+            .iter()
+            .map(|(k, v)| {
+                let new_k = fit_in_u8(*k);
+                let new_v = v
+                    .iter()
+                    .map(|(pt, i)| (BCProviderType::from(pt), fit_in_u8(*i)))
+                    .collect();
+                (new_k, new_v)
+            })
+            .collect();
         let func = &self.ir.functions[i];
-        Function::new(i, func.reg_count() + 1, func.param_count(), instrs)
+        Function::new(
+            i,
+            func.reg_count() + 1,
+            func.param_count(),
+            func.upvals().len(),
+            provides,
+            instrs,
+        )
     }
 
     fn compile_basic_block(&mut self, f: usize, bb: usize, instrs: &mut Vec<u32>) {
@@ -205,30 +232,6 @@ impl<'a> LuaIRToLuaBc<'a> {
                     ))
                 } else {
                     panic!("GetAttr should be a Instr::ThreeArg instruction!")
-                }
-            }
-            MovUp => {
-                if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
-                    instrs.push(make_instr(
-                        opcode.to_opcode(),
-                        arg1.get_reg() as u8,
-                        arg2.get_some() as u8,
-                        arg3.get_reg() as u8,
-                    ))
-                } else {
-                    panic!("MovUp should be a Instr::ThreeArg instruction!")
-                }
-            }
-            MovUpFromUp => {
-                if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
-                    instrs.push(make_instr(
-                        opcode.to_opcode(),
-                        arg1.get_reg() as u8,
-                        arg2.get_some() as u8,
-                        arg3.get_some() as u8,
-                    ))
-                } else {
-                    panic!("MovUpFromUp should be a Instr::ThreeArg instruction!")
                 }
             }
             GetUpVal => {

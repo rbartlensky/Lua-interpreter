@@ -1,6 +1,6 @@
 use super::instr::{Arg, Instr};
 use irgen::opcodes::IROpcode;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub struct BasicBlock<'a> {
     parents: Vec<usize>,
@@ -105,11 +105,19 @@ impl<'a> BasicBlock<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProviderType {
+    Upval(usize),
+    Reg(usize),
+}
+
 /// Represents a compiled function in Lua.
 pub struct CompiledFunc<'a> {
     parent_func: Option<usize>,
     parent_block: Option<usize>,
     upvals: BTreeMap<&'a str, usize>,
+    // provides another function with the following upvalues
+    provides: HashMap<usize, BTreeSet<(ProviderType, usize)>>,
     reg_count: usize,
     param_count: usize,
     basic_blocks: Vec<BasicBlock<'a>>,
@@ -123,6 +131,7 @@ impl<'a> CompiledFunc<'a> {
             parent_func: None,
             parent_block: None,
             upvals: BTreeMap::new(),
+            provides: HashMap::new(),
             reg_count: 0,
             param_count,
             basic_blocks: vec![],
@@ -162,6 +171,23 @@ impl<'a> CompiledFunc<'a> {
         let len = self.upvals.len();
         self.upvals.insert(name, len);
         len
+    }
+
+    pub fn provides(&self) -> &HashMap<usize, BTreeSet<(ProviderType, usize)>> {
+        &self.provides
+    }
+
+    pub fn push_provider(&mut self, func_idx: usize, what: (ProviderType, usize)) {
+        self.provides
+            .entry(func_idx)
+            .and_modify(|v| {
+                v.insert(what.clone());
+            })
+            .or_insert_with(|| {
+                let mut set = BTreeSet::new();
+                set.insert(what);
+                set
+            });
     }
 
     pub fn get_new_reg(&mut self) -> usize {

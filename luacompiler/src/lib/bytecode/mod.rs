@@ -3,12 +3,41 @@ pub mod instructions;
 use self::instructions::format_instr;
 use bincode::{deserialize, serialize};
 use bytecodegen::constants_map::ConstantsMap;
+use irgen::compiled_func::ProviderType;
 use std::{
+    collections::HashMap,
     fmt,
     fs::File,
     io::{self, Write},
     vec::Vec,
 };
+
+#[derive(Serialize, Deserialize)]
+pub enum BCProviderType {
+    Reg(u8),
+    Upval(u8),
+}
+
+impl From<&ProviderType> for BCProviderType {
+    fn from(pt: &ProviderType) -> Self {
+        match pt {
+            ProviderType::Reg(r) => {
+                if *r <= u8::max_value() as usize {
+                    BCProviderType::Reg(*r as u8)
+                } else {
+                    panic!("ProviderType argument is too large!")
+                }
+            }
+            ProviderType::Upval(r) => {
+                if *r <= u8::max_value() as usize {
+                    BCProviderType::Upval(*r as u8)
+                } else {
+                    panic!("ProviderType argument is too large!")
+                }
+            }
+        }
+    }
+}
 
 /// Represents a function in Lua.
 #[derive(Serialize, Deserialize)]
@@ -16,15 +45,26 @@ pub struct Function {
     index: usize,
     reg_count: usize,
     param_count: usize,
+    upvals_count: usize,
+    provides: HashMap<u8, Vec<(BCProviderType, u8)>>,
     instrs: Vec<u32>,
 }
 
 impl Function {
-    pub fn new(index: usize, reg_count: usize, param_count: usize, instrs: Vec<u32>) -> Function {
+    pub fn new(
+        index: usize,
+        reg_count: usize,
+        param_count: usize,
+        upvals_count: usize,
+        provides: HashMap<u8, Vec<(BCProviderType, u8)>>,
+        instrs: Vec<u32>,
+    ) -> Function {
         Function {
             index,
             reg_count,
             param_count,
+            upvals_count,
+            provides,
             instrs,
         }
     }
@@ -35,6 +75,8 @@ impl Function {
             index: 0,
             reg_count: 0,
             param_count: 0,
+            upvals_count: 0,
+            provides: HashMap::new(),
             instrs,
         }
     }

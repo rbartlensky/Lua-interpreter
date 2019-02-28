@@ -4,7 +4,7 @@ pub mod lua_ir;
 pub mod opcodes;
 mod utils;
 
-use self::compiled_func::{BasicBlock, CompiledFunc};
+use self::compiled_func::{BasicBlock, CompiledFunc, ProviderType};
 use self::instr::{Arg, Instr};
 use self::lua_ir::LuaIR;
 use self::opcodes::IROpcode::*;
@@ -120,8 +120,11 @@ impl<'a> LuaToIR<'a> {
         // go through all the parents, and check if we can find <name>
         while func.is_some() {
             // found <name>, so we can create a new upvalue, and load it
-            if let Some(_) = self.get_reg_from_block(name, func.unwrap(), block.unwrap()) {
-                return Some(self.curr_func().push_upval(name));
+            if let Some(reg) = self.get_reg_from_block(name, func.unwrap(), block.unwrap()) {
+                let upval_idx = self.curr_func().push_upval(name);
+                self.functions[func.unwrap()]
+                    .push_provider(self.curr_func, (ProviderType::Reg(reg), upval_idx + 1));
+                return Some(upval_idx);
             } else {
                 let p_func = &self.functions[func.unwrap()];
                 block = p_func.parent_block();
@@ -800,22 +803,17 @@ impl<'a> LuaToIR<'a> {
             Arg::Func(new_func_id),
         ));
         // declare, update and move upvalues based on what the child function depends on
-        let (instrs, curr_func_upvals) = {
+        let (provides, curr_func_upvals) = {
             let mut curr_func_upvals_count = self.curr_func().upvals().len();
             let new_func = &self.functions[new_func_id];
-            let mut instrs = Vec::with_capacity(new_func.upvals().len());
             let mut curr_func_upvals = vec![];
+            let mut provides = vec![];
             // move the upvalues into the new function
             for (name, location) in new_func.upvals() {
                 // does the child function have a dependency on any of the current local
                 // variables?
                 if let Some(local_reg) = self.get_reg(name) {
-                    instrs.push(Instr::ThreeArg(
-                        MovUp,
-                        Arg::Reg(reg),
-                        Arg::Some(*location + 1),
-                        Arg::Reg(local_reg),
-                    ))
+                    provides.push((new_func_id, (ProviderType::Reg(local_reg), *location + 1)));
                 } else {
                     // the child has a dependency on either:
                     // i)  an already created upvalue of the current function
@@ -830,19 +828,16 @@ impl<'a> LuaToIR<'a> {
                         curr_func_upvals_count += 1;
                         curr_func_upvals_count
                     };
-                    instrs.push(Instr::ThreeArg(
-                        MovUpFromUp,
-                        Arg::Reg(reg),
-                        Arg::Some(*location + 1),
-                        Arg::Some(upval_idx),
-                    ));
+                    provides.push((new_func_id, (ProviderType::Upval(upval_idx), *location + 1)));
                 }
             }
-            (instrs, curr_func_upvals)
+            (provides, curr_func_upvals)
         };
-        self.instrs().extend(instrs);
-        for name in curr_func_upvals {
-            self.curr_func().push_upval(name);
+        for (func_idx, provider) in provides {
+            self.curr_func().push_provider(func_idx, provider);
+        }
+        for upval in curr_func_upvals {
+            self.curr_func().push_upval(upval);
         }
         reg
     }
@@ -2142,7 +2137,6 @@ mod tests {
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(2)),
                 Instr::TwoArg(CLOSURE, Reg(1), Func(1)),
-                Instr::ThreeArg(MovUp, Reg(1), Some(1), Reg(0)),
                 Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(1)),
             ],
             vec![
@@ -2152,7 +2146,18 @@ mod tests {
                 Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(1)),
             ],
         ];
+        let expected_provides = vec![
+            {
+                let mut map = HashMap::new();
+                let mut tree = BTreeSet::new();
+                tree.insert((ProviderType::Reg(0), 1));
+                map.insert(1, tree);
+                map
+            },
+            HashMap::new(),
+        ];
         for (i, f) in ir.functions.iter().enumerate() {
+            assert_eq!(f.provides(), &expected_provides[i]);
             check_eq(f.get_block(0).instrs(), &expected_instrs[i])
         }
     }
@@ -2174,14 +2179,11 @@ mod tests {
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(2)),
                 Instr::TwoArg(CLOSURE, Reg(1), Func(1)),
-                Instr::ThreeArg(MovUp, Reg(1), Some(1), Reg(0)),
                 Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(1)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(3)),
                 Instr::TwoArg(CLOSURE, Reg(1), Func(2)),
-                Instr::ThreeArg(MovUpFromUp, Reg(1), Some(1), Some(1)),
-                Instr::ThreeArg(MovUp, Reg(1), Some(2), Reg(0)),
                 Instr::ThreeArg(SetUpAttr, Some(0), Str("g".to_string()), Reg(1)),
             ],
             vec![
@@ -2190,7 +2192,29 @@ mod tests {
                 Instr::ThreeArg(ADD, Reg(2), Reg(0), Reg(1)),
             ],
         ];
+        let expected_provides = vec![
+            {
+                let mut map = HashMap::new();
+                let mut tree = BTreeSet::new();
+                tree.insert((ProviderType::Reg(0), 1));
+                map.insert(1, tree);
+                let mut tree = BTreeSet::new();
+                tree.insert((ProviderType::Reg(0), 1));
+                map.insert(2, tree);
+                map
+            },
+            {
+                let mut map = HashMap::new();
+                let mut tree = BTreeSet::new();
+                tree.insert((ProviderType::Reg(0), 2));
+                tree.insert((ProviderType::Upval(1), 1));
+                map.insert(2, tree);
+                map
+            },
+            HashMap::new(),
+        ];
         for (i, f) in ir.functions.iter().enumerate() {
+            assert_eq!(f.provides(), &expected_provides[i]);
             check_eq(f.get_block(0).instrs(), &expected_instrs[i])
         }
     }
