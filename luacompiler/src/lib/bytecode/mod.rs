@@ -101,6 +101,14 @@ impl Function {
     pub fn param_count(&self) -> usize {
         self.param_count
     }
+
+    pub fn upvals_count(&self) -> usize {
+        self.upvals_count
+    }
+
+    pub fn provides(&self) -> &HashMap<u8, Vec<(BCProviderType, u8)>> {
+        &self.provides
+    }
 }
 
 /// A simpler representation of Lua

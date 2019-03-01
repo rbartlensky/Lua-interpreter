@@ -1,5 +1,5 @@
 use crate::{errors::LuaError, lua_values::LuaVal, stdlib::StdFunction, Vm};
-use gc::{Finalize, Gc, Trace};
+use gc::{Finalize, Gc, GcCell, Trace};
 use luacompiler::bytecode::Function;
 use std::cell::Cell;
 
@@ -31,7 +31,7 @@ pub struct UserFunction {
     param_count: usize,
     #[unsafe_ignore_trace]
     ret_vals: Cell<usize>,
-    upvals: Vec<Gc<LuaVal>>,
+    upvals: GcCell<Vec<LuaVal>>,
 }
 
 impl UserFunction {
@@ -39,14 +39,14 @@ impl UserFunction {
         index: usize,
         reg_count: usize,
         param_count: usize,
-        upvals: Vec<Gc<LuaVal>>,
+        upvals: Vec<LuaVal>,
     ) -> UserFunction {
         UserFunction {
             index,
             reg_count,
             param_count,
             ret_vals: Cell::new(0),
-            upvals,
+            upvals: GcCell::new(upvals),
         }
     }
 }
@@ -76,17 +76,20 @@ impl LuaClosure for UserFunction {
         self.ret_vals.set(vals);
     }
 
-    fn get_upval(&self, i: usize) -> Result<&Gc<LuaVal>, LuaError> {
-        self.upvals.get(i).ok_or(LuaError::Error(format!(
-            "Upvalue with index {} doesn't exist!",
-            i
-        )))
+    fn get_upval(&self, i: usize) -> Result<LuaVal, LuaError> {
+        self.upvals
+            .borrow()
+            .get(i)
+            .map(|v| v.clone())
+            .ok_or(LuaError::Error(format!(
+                "Upvalue with index {} doesn't exist!",
+                i
+            )))
     }
 
-    fn set_upval(&self, _: usize, _: LuaVal) -> Result<(), LuaError> {
-        Err(LuaError::Error(
-            "SetUpVal doesn't work on BuiltinFunctions.".to_string(),
-        ))
+    fn set_upval(&self, i: usize, val: LuaVal) -> Result<(), LuaError> {
+        self.upvals.borrow_mut()[i] = val;
+        Ok(())
     }
 }
 
@@ -123,7 +126,7 @@ impl LuaClosure for BuiltinFunction {
         self.ret_vals.set(vals);
     }
 
-    fn get_upval(&self, _: usize) -> Result<&Gc<LuaVal>, LuaError> {
+    fn get_upval(&self, _: usize) -> Result<LuaVal, LuaError> {
         Err(LuaError::Error(
             "GetUpVal doesn't work on BuiltinFunctions.".to_string(),
         ))
@@ -144,12 +147,16 @@ pub fn from_stdfunction(func: &StdFunction) -> Gc<Box<LuaClosure>> {
 }
 
 pub fn from_function(func: &Function) -> Gc<Box<LuaClosure>> {
+    let mut upvals = Vec::with_capacity(func.upvals_count());
+    for _ in 0..func.upvals_count() {
+        upvals.push(LuaVal::new());
+    }
     Gc::new(Box::new(UserFunction {
         index: func.index(),
         reg_count: func.reg_count(),
         param_count: func.param_count(),
         ret_vals: Cell::new(0),
-        upvals: vec![],
+        upvals: GcCell::new(upvals),
     }))
 }
 
@@ -160,6 +167,6 @@ pub trait LuaClosure: Trace + Finalize {
     fn call(&self, vm: &mut Vm) -> Result<(), LuaError>;
     fn ret_vals(&self) -> usize;
     fn set_ret_vals(&self, vals: usize);
-    fn get_upval(&self, i: usize) -> Result<&Gc<LuaVal>, LuaError>;
+    fn get_upval(&self, i: usize) -> Result<LuaVal, LuaError>;
     fn set_upval(&self, i: usize, value: LuaVal) -> Result<(), LuaError>;
 }

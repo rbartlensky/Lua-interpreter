@@ -22,3 +22,13 @@ pub fn set_up_attr(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     vm.closure().get_upval(arg1)?.set_attr(attr, val)?;
     Ok(())
 }
+
+pub fn get_upval(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
+    vm.registers[first_arg(instr) as usize] = vm.closure().get_upval(second_arg(instr) as usize)?;
+    Ok(())
+}
+
+pub fn set_upval(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
+    let val = vm.registers[second_arg(instr) as usize].clone();
+    vm.closure().set_upval(first_arg(instr) as usize, val)
+}

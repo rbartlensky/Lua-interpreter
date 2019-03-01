@@ -1,7 +1,7 @@
 use errors::LuaError;
 use lua_values::{lua_closure::UserFunction, LuaVal};
-use luacompiler::bytecode::instructions::*;
-use luacompiler::bytecode::instructions::{first_arg, second_arg};
+use luacompiler::bytecode::instructions::{first_arg, second_arg, *};
+use luacompiler::bytecode::BCProviderType;
 use StackFrame;
 use Vm;
 
@@ -9,12 +9,32 @@ use Vm;
 pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     // Take the index of the function which is the child of the current function
     let func = vm.bytecode.get_function(second_arg(instr) as usize);
-    let ufunc = UserFunction::new(
-        func.index(),
-        func.reg_count(),
-        func.param_count(),
-        vec![vm.env.clone()],
-    );
+    let upvals_len = func.upvals_count();
+    let mut upvals = Vec::with_capacity(upvals_len + 1);
+    upvals.push(vm.env.clone());
+    for _ in 0..upvals_len {
+        upvals.push(LuaVal::new());
+    }
+
+    let caller_index = vm.stack_frames[vm.curr_frame].closure.index();
+    if let Some(provides) = vm
+        .bytecode
+        .get_function(caller_index)
+        .provides()
+        .get(&(func.index() as u8))
+    {
+        for (provider, upval) in provides.iter() {
+            match provider {
+                BCProviderType::Reg(r) => {
+                    upvals[*upval as usize] = vm.registers[*r as usize].clone()
+                }
+                BCProviderType::Upval(u) => {
+                    upvals[*upval as usize] = vm.closure().get_upval(*u as usize)?
+                }
+            };
+        }
+    }
+    let ufunc = UserFunction::new(func.index(), func.reg_count(), func.param_count(), upvals);
     vm.registers[first_arg(instr) as usize] = LuaVal::from(ufunc);
     Ok(())
 }
@@ -57,9 +77,13 @@ pub fn call(vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
     let old_pc = vm.pc;
     // update the current frame to the last one
     let old_curr_frame = vm.curr_frame;
+    let caller_index = vm.closure().index();
     let args_start = vm.stack_frames.last().unwrap().top;
     let args_count = vm.top - args_start;
     vm.curr_frame = vm.stack_frames.len() - 1;
+    // update upvals of the callee
+    let callee_index = vm.closure().index();
+    set_upvals(vm, caller_index, callee_index, old_curr_frame)?;
     // push the first `reg_count` registers to the stack, as the called function
     // will modify these
     for i in 0..vm.closure().reg_count() {
@@ -89,6 +113,8 @@ pub fn call(vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
     for (reg, i) in ((args_start + args_count)..(vm.top - ret_vals)).enumerate() {
         std::mem::swap(&mut vm.registers[reg], &mut vm.stack[i]);
     }
+    // restore upvals
+    pop_upvals(vm, caller_index, callee_index, old_curr_frame)?;
     // restore the state of the caller
     vm.closure().set_ret_vals(0);
     vm.stack_frames.pop();
@@ -139,6 +165,63 @@ pub fn call(vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
         }
     } else {
         vm.top = args_start;
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn set_upvals(
+    vm: &Vm,
+    caller_index: usize,
+    callee_index: usize,
+    old_curr_frame: usize,
+) -> Result<(), LuaError> {
+    if let Some(upvals) = vm
+        .bytecode
+        .get_function(caller_index)
+        .provides()
+        .get(&(callee_index as u8))
+    {
+        for (provider, upval) in upvals.iter() {
+            match provider {
+                BCProviderType::Reg(r) => vm
+                    .closure()
+                    .set_upval(*upval as usize, vm.registers[*r as usize].clone())?,
+                BCProviderType::Upval(u) => vm.closure().set_upval(
+                    *upval as usize,
+                    vm.stack_frames[old_curr_frame]
+                        .closure
+                        .get_upval(*u as usize)?,
+                )?,
+            };
+        }
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn pop_upvals(
+    vm: &mut Vm,
+    caller_index: usize,
+    callee_index: usize,
+    old_curr_frame: usize,
+) -> Result<(), LuaError> {
+    if let Some(upvals) = vm
+        .bytecode
+        .get_function(caller_index)
+        .provides()
+        .get(&(callee_index as u8))
+    {
+        for (provider, upval) in upvals.iter() {
+            match provider {
+                BCProviderType::Reg(r) => {
+                    vm.registers[*r as usize] = vm.closure().get_upval(*upval as usize)?
+                }
+                BCProviderType::Upval(u) => vm.stack_frames[old_curr_frame]
+                    .closure
+                    .set_upval(*u as usize, vm.closure().get_upval(*upval as usize)?)?,
+            };
+        }
     }
     Ok(())
 }

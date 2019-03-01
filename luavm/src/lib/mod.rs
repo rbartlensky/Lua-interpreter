@@ -65,6 +65,8 @@ const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
     ge,
     ne,
     jmp_eq,
+    get_upval,
+    set_upval,
 ];
 
 pub struct StackFrame {
@@ -85,7 +87,7 @@ pub struct Vm {
     /// table. This means that _ENV["x"] = <val> will modify env_attrs[2]. If however
     /// "x" was not in the constant table, then the lookup of the attribute would be
     /// done via the `get_attr` method of the `LuaTable` struct.
-    pub env: Gc<LuaVal>,
+    pub env: LuaVal,
     pub pc: usize,
 }
 
@@ -94,10 +96,10 @@ impl Vm {
     pub fn new(bytecode: LuaBytecode, script_args: Vec<&str>) -> Vm {
         let mut registers: Vec<LuaVal> = Vec::new();
         registers.resize(REG_NUM, LuaVal::new());
-        let mut env = Gc::new(LuaVal::from(CachingTable::new(
+        let mut env = LuaVal::from(CachingTable::new(
             HashMap::new(),
             bytecode.get_strings_len(),
-        )));
+        ));
         {
             let rev_strings: HashMap<&str, usize> = bytecode
                 .strings()
@@ -144,7 +146,7 @@ impl Vm {
     fn init_stdlib_and_args(
         script_args: &Vec<&str>,
         rev_strings: &HashMap<&str, usize>,
-        env: &mut Gc<LuaVal>,
+        env: &mut LuaVal,
     ) {
         let args = LuaVal::from(UserTable::new(HashMap::new()));
         for (i, sarg) in script_args.iter().enumerate() {
@@ -165,8 +167,8 @@ impl Vm {
             .unwrap();
     }
 
-    pub fn closure(&mut self) -> &mut Gc<Box<LuaClosure>> {
-        &mut self.stack_frames[self.curr_frame].closure
+    pub fn closure(&self) -> &Gc<Box<LuaClosure>> {
+        &self.stack_frames[self.curr_frame].closure
     }
 
     /// Evaluate the program.
