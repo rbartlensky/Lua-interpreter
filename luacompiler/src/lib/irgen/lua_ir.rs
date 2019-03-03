@@ -1,4 +1,8 @@
-use irgen::{compiled_func::CompiledFunc, instr::*, opcodes::IROpcode::*};
+use irgen::{
+    compiled_func::{CompiledFunc, ProviderType},
+    instr::*,
+    opcodes::IROpcode::*,
+};
 
 /// Represents an IR in which all instructions are in SSA form.
 pub struct LuaIR<'a> {
@@ -31,6 +35,16 @@ impl<'a> LuaIR<'a> {
             for (bb, args) in points {
                 for block in &mut self.functions[f].get_mut_blocks()[..bb + 1] {
                     block.replace_regs_with(&args[1..], &args[0])
+                }
+                // also update the provides
+                for (_, provides) in self.functions[f].provides_mut().iter_mut() {
+                    for (_, ty) in provides.iter_mut() {
+                        if let ProviderType::Reg(ref mut reg) = ty {
+                            if args[1..].contains(&Arg::Reg(*reg)) {
+                                *reg = args[0].get_reg();
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -72,7 +72,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                 let new_k = fit_in_u8(*k);
                 let new_v = v
                     .iter()
-                    .map(|(pt, i)| (BCProviderType::from(pt), fit_in_u8(*i)))
+                    .map(|(i, pt)| (BCProviderType::from(pt), fit_in_u8(*i)))
                     .collect();
                 (new_k, new_v)
             })

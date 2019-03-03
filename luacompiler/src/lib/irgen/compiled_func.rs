@@ -1,13 +1,14 @@
 use super::instr::{Arg, Instr};
 use irgen::opcodes::IROpcode;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, HashMap};
 
 pub struct BasicBlock<'a> {
     parents: Vec<usize>,
     dominators: Vec<usize>,
     instrs: Vec<Instr>,
-    non_locals: HashMap<&'a str, usize>,
-    locals: HashMap<&'a str, usize>,
+    non_locals: BTreeMap<&'a str, Vec<usize>>,
+    locals: BTreeMap<&'a str, Vec<usize>>,
 }
 
 impl<'a> BasicBlock<'a> {
@@ -16,8 +17,8 @@ impl<'a> BasicBlock<'a> {
             parents: vec![],
             dominators: vec![],
             instrs: vec![],
-            non_locals: HashMap::new(),
-            locals: HashMap::new(),
+            non_locals: BTreeMap::new(),
+            locals: BTreeMap::new(),
         }
     }
 
@@ -26,8 +27,8 @@ impl<'a> BasicBlock<'a> {
             parents,
             dominators: vec![],
             instrs: vec![],
-            non_locals: HashMap::new(),
-            locals: HashMap::new(),
+            non_locals: BTreeMap::new(),
+            locals: BTreeMap::new(),
         }
     }
 
@@ -78,23 +79,85 @@ impl<'a> BasicBlock<'a> {
         self.dominators.push(bb);
     }
 
-    pub fn set_reg_name(&mut self, reg: usize, name: &'a str, is_local_decl: bool) {
-        if is_local_decl || self.locals.contains_key(name) {
-            self.locals.insert(name, reg);
+    pub fn set_reg_name(&mut self, reg: usize, name: &'a str, is_local_decl: bool) -> usize {
+        let mut new_regs = reg;
+        let mut instrs = vec![];
+        // `local <name> = ...` is declared
+        if is_local_decl {
+            // check if we shadow any variable with the same name
+            if let Some(non_locals_vec) = self.non_locals.get_mut(name) {
+                // we modified an outer variable multiple times, thus emit a phi
+                if non_locals_vec.len() > 1 {
+                    new_regs += 1;
+                    BasicBlock::gen_phi(&mut instrs, non_locals_vec, new_regs);
+                }
+            }
+            self.locals
+                .entry(name)
+                .and_modify(|locals_vec| {
+                    if locals_vec.len() > 1 {
+                        new_regs += 1;
+                        BasicBlock::gen_phi(&mut instrs, locals_vec, new_regs);
+                    }
+                    locals_vec[0] = reg;
+                })
+                .or_insert_with(|| vec![reg]);
         } else {
-            self.non_locals.insert(name, reg);
+            if let Entry::Occupied(mut locals) = self.locals.entry(name) {
+                locals.get_mut().push(reg);
+                return 0;
+            }
+            let non_local_entry = self.non_locals.entry(name);
+            if let Entry::Occupied(mut non_locals) = non_local_entry {
+                println!("Pushing {}", name);
+                non_locals.get_mut().push(reg);
+                println!("{:?}", non_locals.get_mut());
+                return 0;
+            }
+            non_local_entry.or_insert(vec![reg]);
         }
+        self.instrs.extend(instrs);
+        new_regs - reg
+    }
+
+    fn gen_phi(instrs: &mut Vec<Instr>, var_vec: &mut Vec<usize>, merge_reg: usize) {
+        let mut phi_args: Vec<Arg> = vec![Arg::Reg(merge_reg)];
+        let extra_args: Vec<Arg> = var_vec.iter().map(|r| Arg::Reg(*r)).collect();
+        phi_args.extend(extra_args);
+        let phi = Instr::NArg(IROpcode::Phi, phi_args);
+        instrs.push(phi);
+        var_vec.clear();
+        var_vec.push(merge_reg);
+    }
+
+    pub fn generate_phis(&mut self, start_reg: usize) -> usize {
+        let mut instrs = vec![];
+        let mut new_regs = start_reg;
+        for (_, non_locals) in self.non_locals.iter_mut() {
+            if non_locals.len() > 1 {
+                BasicBlock::gen_phi(&mut instrs, non_locals, new_regs);
+                new_regs += 1;
+            }
+        }
+        for (_, locals) in self.locals.iter_mut() {
+            if locals.len() > 1 {
+                BasicBlock::gen_phi(&mut instrs, locals, new_regs);
+                new_regs += 1;
+            }
+        }
+        self.instrs.extend(instrs);
+        new_regs - start_reg
     }
 
     pub fn get_reg(&self, name: &'a str) -> Option<usize> {
         let res = self.locals.get(name);
         if res.is_some() {
-            return res.map(|v| *v);
+            return res.map(|v| *v.last().unwrap());
         }
-        self.non_locals.get(name).map(|v| *v)
+        self.non_locals.get(name).map(|v| *v.last().unwrap())
     }
 
-    pub fn non_locals(&self) -> &HashMap<&'a str, usize> {
+    pub fn non_locals(&self) -> &BTreeMap<&'a str, Vec<usize>> {
         &self.non_locals
     }
 
@@ -117,7 +180,7 @@ pub struct CompiledFunc<'a> {
     parent_block: Option<usize>,
     upvals: BTreeMap<&'a str, usize>,
     // provides another function with the following upvalues
-    provides: HashMap<usize, BTreeSet<(ProviderType, usize)>>,
+    provides: HashMap<usize, BTreeMap<usize, ProviderType>>,
     reg_count: usize,
     param_count: usize,
     basic_blocks: Vec<BasicBlock<'a>>,
@@ -173,19 +236,23 @@ impl<'a> CompiledFunc<'a> {
         len
     }
 
-    pub fn provides(&self) -> &HashMap<usize, BTreeSet<(ProviderType, usize)>> {
+    pub fn provides(&self) -> &HashMap<usize, BTreeMap<usize, ProviderType>> {
         &self.provides
     }
 
-    pub fn push_provider(&mut self, func_idx: usize, what: (ProviderType, usize)) {
+    pub fn provides_mut(&mut self) -> &mut HashMap<usize, BTreeMap<usize, ProviderType>> {
+        &mut self.provides
+    }
+
+    pub fn push_provider(&mut self, func_idx: usize, upval_idx: usize, pt: ProviderType) {
         self.provides
             .entry(func_idx)
             .and_modify(|v| {
-                v.insert(what.clone());
+                v.insert(upval_idx, pt.clone());
             })
             .or_insert_with(|| {
-                let mut set = BTreeSet::new();
-                set.insert(what);
+                let mut set = BTreeMap::new();
+                set.insert(upval_idx, pt);
                 set
             });
     }

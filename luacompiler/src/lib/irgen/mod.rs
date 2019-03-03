@@ -86,6 +86,17 @@ impl<'a> LuaToIR<'a> {
     pub fn to_lua_ir(mut self) -> LuaIR<'a> {
         let new_block = self.curr_func().create_block();
         self.compile_block_in_basic_block(&self.pt.tree, new_block);
+        for mut func in &mut self.functions {
+            let reg_count = func.reg_count();
+            let new_regs = func
+                .get_mut_blocks()
+                .last_mut()
+                .unwrap()
+                .generate_phis(reg_count);
+            for _ in 0..new_regs {
+                func.get_new_reg();
+            }
+        }
         LuaIR::new(self.functions, 0)
     }
 
@@ -110,6 +121,21 @@ impl<'a> LuaToIR<'a> {
         self.get_reg_from_block(name, self.curr_func, self.curr_block)
     }
 
+    fn set_reg_name(&mut self, reg: usize, name: &'a str, local_decl: bool) {
+        let new_regs_count = self.curr_block().set_reg_name(reg, name, local_decl);
+        for _ in 0..new_regs_count {
+            self.curr_func().get_new_reg();
+        }
+    }
+
+    fn generate_phis_for_bb(&mut self, bb: usize) {
+        let reg_count = self.curr_func().reg_count();
+        let new_regs = self.curr_func().get_mut_block(bb).generate_phis(reg_count);
+        for _ in 0..new_regs {
+            self.curr_func().get_new_reg();
+        }
+    }
+
     fn get_upval(&mut self, name: &'a str) -> Option<usize> {
         // does the current function define the upvalue already?
         if let Some(&upval_idx) = self.curr_func().upvals().get(name) {
@@ -122,8 +148,11 @@ impl<'a> LuaToIR<'a> {
             // found <name>, so we can create a new upvalue, and load it
             if let Some(reg) = self.get_reg_from_block(name, func.unwrap(), block.unwrap()) {
                 let upval_idx = self.curr_func().push_upval(name);
-                self.functions[func.unwrap()]
-                    .push_provider(self.curr_func, (ProviderType::Reg(reg), upval_idx + 1));
+                self.functions[func.unwrap()].push_provider(
+                    self.curr_func,
+                    upval_idx + 1,
+                    ProviderType::Reg(reg),
+                );
                 return Some(upval_idx);
             } else {
                 let p_func = &self.functions[func.unwrap()];
@@ -174,6 +203,7 @@ impl<'a> LuaToIR<'a> {
     /// Compile a <block>.
     fn compile_block(&mut self, node: &'a Node<u8>) -> usize {
         let parent = self.curr_block;
+        self.generate_phis_for_bb(parent);
         let curr_block = self.curr_func().create_block_with_parents(vec![parent]);
         self.curr_block = curr_block;
         self.curr_block().push_dominator(parent);
@@ -193,6 +223,7 @@ impl<'a> LuaToIR<'a> {
 
     pub fn create_child_block(&mut self) -> usize {
         let parent = self.curr_block;
+        self.generate_phis_for_bb(parent);
         let curr_block = self.curr_func().create_block_with_parents(vec![parent]);
         self.curr_block = curr_block;
         self.curr_block().push_dominator(parent);
@@ -376,7 +407,7 @@ impl<'a> LuaToIR<'a> {
             let mut regs = vec![];
             for i in exprs.len()..names.len() {
                 let new_reg = self.curr_func().get_new_reg();
-                self.curr_block().set_reg_name(new_reg, names[i], true);
+                self.set_reg_name(new_reg, names[i], true);
                 regs.push(new_reg);
             }
             // check if the last expression is a vararg, so that we can emit the correct
@@ -440,7 +471,7 @@ impl<'a> LuaToIR<'a> {
                         if !self.is_local(name) {
                             postponed_instrs.push((var, reg));
                         } else {
-                            self.curr_block().set_reg_name(reg, name, false);
+                            self.set_reg_name(reg, name, false);
                         }
                     }
                     VarType::Dict(..) => {
@@ -614,11 +645,7 @@ impl<'a> LuaToIR<'a> {
                     }
                     // if a variable is assigned a value multiple times, we have to make sure
                     // that the map knows the new register which holds the new value
-                    self.curr_block().set_reg_name(
-                        value,
-                        name,
-                        action == AssignmentType::LocalDecl,
-                    );
+                    self.set_reg_name(value, name, action == AssignmentType::LocalDecl);
                     ResultType::Local(value)
                 } else {
                     if action != AssignmentType::Postponed {
@@ -813,7 +840,7 @@ impl<'a> LuaToIR<'a> {
                 // does the child function have a dependency on any of the current local
                 // variables?
                 if let Some(local_reg) = self.get_reg(name) {
-                    provides.push((new_func_id, (ProviderType::Reg(local_reg), *location + 1)));
+                    provides.push((new_func_id, *location + 1, ProviderType::Reg(local_reg)));
                 } else {
                     // the child has a dependency on either:
                     // i)  an already created upvalue of the current function
@@ -828,13 +855,13 @@ impl<'a> LuaToIR<'a> {
                         curr_func_upvals_count += 1;
                         curr_func_upvals_count
                     };
-                    provides.push((new_func_id, (ProviderType::Upval(upval_idx), *location + 1)));
+                    provides.push((new_func_id, *location + 1, ProviderType::Upval(upval_idx)));
                 }
             }
             (provides, curr_func_upvals)
         };
-        for (func_idx, provider) in provides {
-            self.curr_func().push_provider(func_idx, provider);
+        for (func_idx, upval_idx, pt) in provides {
+            self.curr_func().push_provider(func_idx, upval_idx, pt);
         }
         for upval in curr_func_upvals {
             self.curr_func().push_upval(upval);
@@ -1028,7 +1055,7 @@ impl<'a> LuaToIR<'a> {
                 self.functions[self.curr_func].set_param_count(names.len());
                 for name in names {
                     let reg = self.curr_func().get_new_reg();
-                    self.curr_block().set_reg_name(reg, name, true);
+                    self.set_reg_name(reg, name, true);
                 }
             }
             _ => panic!("Root node was not a <parlist>"),
@@ -1122,6 +1149,9 @@ impl<'a> LuaToIR<'a> {
             .chain(elselist.iter())
             .map(|(e, b)| {
                 let before = self.curr_block;
+                // emit the phis of the block before compiling the condition to
+                // ensure the correct register contains the result
+                self.generate_phis_for_bb(before);
                 // compile if condition
                 let expr_res = self.compile_expr(e);
                 // compile true branch as a child of the current block
@@ -1153,6 +1183,7 @@ impl<'a> LuaToIR<'a> {
         }
         for &branch in &branches {
             let curr = self.curr_block;
+            self.generate_phis_for_bb(branch);
             self.get_block(branch)
                 .mut_instrs()
                 .push(Instr::OneArg(Jmp, Arg::Some(curr)));
@@ -1175,14 +1206,14 @@ impl<'a> LuaToIR<'a> {
                 .iter()
                 .chain(vec![curr_block_index, main_block].iter())
             {
-                for (name, &reg) in curr_func.get_block(p).non_locals() {
+                for (name, ref reg) in curr_func.get_block(p).non_locals() {
                     phis.entry(name)
                         .and_modify(|args| {
-                            args.insert(reg);
+                            args.insert(*reg.last().unwrap());
                         })
                         .or_insert_with(|| {
                             let mut new_set = BTreeSet::new();
-                            new_set.insert(reg);
+                            new_set.insert(*reg.last().unwrap());
                             new_set
                         });
                 }
@@ -1196,7 +1227,7 @@ impl<'a> LuaToIR<'a> {
             let mut args: Vec<Arg> = args.iter().map(|v| Arg::Reg(*v)).collect();
             let new_reg = self.curr_func().get_new_reg();
             args.insert(0, Arg::Reg(new_reg));
-            self.curr_block().set_reg_name(new_reg, name, false);
+            self.set_reg_name(new_reg, name, false);
             self.instrs().push(Instr::NArg(Phi, args));
         }
     }
@@ -1236,6 +1267,7 @@ impl<'a> LuaToIR<'a> {
 
     fn compile_while(&mut self, expr: &'a Node<u8>, block: &'a Node<u8>) {
         let parent = self.curr_block;
+        self.generate_phis_for_bb(parent);
         // compile expr in a new block, and create a branching instruction to it
         self.curr_block()
             .mut_instrs()
@@ -1274,7 +1306,7 @@ impl<'a> LuaToIR<'a> {
         }
         self.instrs().extend(additional_instrs);
         for (reg, name) in reg_map_updates {
-            self.curr_block().set_reg_name(reg, name, false);
+            self.set_reg_name(reg, name, false);
         }
         self.generate_phis(while_cond_end);
         self.curr_block()
@@ -1374,6 +1406,7 @@ mod tests {
     use super::instr::Arg::*;
     use super::instr::Instr;
     use super::*;
+    use std::collections::BTreeMap;
     use std::fmt::Debug;
 
     fn check_eq<T: Debug + PartialEq>(output: &Vec<T>, expected: &Vec<T>) {
@@ -1597,6 +1630,9 @@ mod tests {
             Instr::TwoArg(MOV, Reg(9), Nil),
             Instr::ThreeArg(SetUpAttr, Some(0), Str("a".to_string()), Reg(8)),
             Instr::ThreeArg(SetUpAttr, Some(0), Str("b".to_string()), Reg(9)),
+            Instr::NArg(Phi, vec![Reg(10), Reg(0), Reg(4)]),
+            Instr::NArg(Phi, vec![Reg(11), Reg(1), Reg(5)]),
+            Instr::NArg(Phi, vec![Reg(12), Reg(2), Reg(6)]),
         ];
         assert!(ir.functions.len() == 1);
         let blocks = &ir.functions[0].blocks();
@@ -2149,8 +2185,8 @@ mod tests {
         let expected_provides = vec![
             {
                 let mut map = HashMap::new();
-                let mut tree = BTreeSet::new();
-                tree.insert((ProviderType::Reg(0), 1));
+                let mut tree = BTreeMap::new();
+                tree.insert(1, ProviderType::Reg(0));
                 map.insert(1, tree);
                 map
             },
@@ -2195,19 +2231,19 @@ mod tests {
         let expected_provides = vec![
             {
                 let mut map = HashMap::new();
-                let mut tree = BTreeSet::new();
-                tree.insert((ProviderType::Reg(0), 1));
+                let mut tree = BTreeMap::new();
+                tree.insert(1, ProviderType::Reg(0));
                 map.insert(1, tree);
-                let mut tree = BTreeSet::new();
-                tree.insert((ProviderType::Reg(0), 1));
+                let mut tree = BTreeMap::new();
+                tree.insert(1, ProviderType::Reg(0));
                 map.insert(2, tree);
                 map
             },
             {
                 let mut map = HashMap::new();
-                let mut tree = BTreeSet::new();
-                tree.insert((ProviderType::Reg(0), 2));
-                tree.insert((ProviderType::Upval(1), 1));
+                let mut tree = BTreeMap::new();
+                tree.insert(2, ProviderType::Reg(0));
+                tree.insert(1, ProviderType::Upval(1));
                 map.insert(2, tree);
                 map
             },
@@ -2216,6 +2252,53 @@ mod tests {
         for (i, f) in ir.functions.iter().enumerate() {
             assert_eq!(f.provides(), &expected_provides[i]);
             check_eq(f.get_block(0).instrs(), &expected_instrs[i])
+        }
+    }
+
+    #[test]
+    fn correct_phis_emitted() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local a = 2
+             a = 3
+             if a then
+               a = 4
+               a = 5
+               local a = 6
+               a = 7
+               local a = 8
+               a = 9
+             end
+             a = 10",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(2)),
+                Instr::TwoArg(MOV, Reg(1), Int(3)),
+                Instr::NArg(Phi, vec![Reg(2), Reg(0), Reg(1)]),
+                Instr::ThreeArg(JmpNE, Reg(2), Some(1), Some(2)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(3), Int(4)),
+                Instr::TwoArg(MOV, Reg(4), Int(5)),
+                Instr::TwoArg(MOV, Reg(5), Int(6)),
+                Instr::NArg(Phi, vec![Reg(6), Reg(3), Reg(4)]),
+                Instr::TwoArg(MOV, Reg(7), Int(7)),
+                Instr::TwoArg(MOV, Reg(8), Int(8)),
+                Instr::NArg(Phi, vec![Reg(9), Reg(5), Reg(7)]),
+                Instr::TwoArg(MOV, Reg(10), Int(9)),
+                Instr::NArg(Phi, vec![Reg(11), Reg(8), Reg(10)]),
+                Instr::OneArg(Jmp, Some(2)),
+            ],
+            vec![
+                Instr::NArg(Phi, vec![Reg(12), Reg(2), Reg(6)]),
+                Instr::TwoArg(MOV, Reg(13), Int(10)),
+                Instr::NArg(Phi, vec![Reg(14), Reg(12), Reg(13)]),
+            ],
+        ];
+        for (i, block) in ir.functions[0].blocks().iter().enumerate() {
+            check_eq(block.instrs(), &expected_instrs[i]);
         }
     }
 }
