@@ -387,6 +387,14 @@ impl<'a> LuaToIR<'a> {
                 //               <explist>, <DO>, <block>, <END>]
                 let name = self.compile_var_or_name(&stat_nodes[1]);
                 self.compile_for_count(name, &stat_nodes[3], &stat_nodes[5], &stat_nodes[7]);
+            } else if is_term(&stat_nodes[0], lua5_3_l::T_LOCAL) {
+                // stat_nodes = [<LOCAL>, <FUNCTION>, <NAME>, <funcbody>]
+                let name = self.compile_var_or_name(&stat_nodes[2]);
+                let new_reg = self.curr_func().get_new_reg();
+                self.instrs()
+                    .push(Instr::TwoArg(MOV, Arg::Reg(new_reg), Arg::Nil));
+                self.set_reg_name(new_reg, name.get_str(), true);
+                self.compile_assignment(name, &stat_nodes[3], AssignmentType::Regular);
             }
         }
     }
@@ -1154,6 +1162,7 @@ impl<'a> LuaToIR<'a> {
                 self.generate_phis_for_bb(before);
                 // compile if condition
                 let expr_res = self.compile_expr(e);
+                let before = self.curr_block;
                 // compile true branch as a child of the current block
                 let true_block = self.compile_block(b);
                 self.curr_block = before;
