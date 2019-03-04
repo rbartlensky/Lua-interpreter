@@ -368,7 +368,14 @@ impl<'a> LuaToIR<'a> {
                 Nonterm {
                     ridx: RIdx(ridx),
                     ref nodes,
-                } if ridx == lua5_3_y::R_FUNCTIONCALL => self.compile_call(&nodes[0], &nodes[1]),
+                } if ridx == lua5_3_y::R_FUNCTIONCALL => {
+                    // nodes = [<prefixexp>, <args>]
+                    if nodes.len() == 2 {
+                        self.compile_call(&nodes[0], &nodes[1])
+                    } else {
+                        self.compile_method(&nodes[0], &nodes[2], &nodes[3])
+                    }
+                }
                 _ => {}
             }
         } else {
@@ -721,7 +728,11 @@ impl<'a> LuaToIR<'a> {
                 ridx: RIdx(ridx),
                 ref nodes,
             } if ridx == lua5_3_y::R_FUNCTIONCALL => {
-                self.compile_call(&nodes[0], &nodes[1]);
+                if nodes.len() == 2 {
+                    self.compile_call(&nodes[0], &nodes[1]);
+                } else {
+                    self.compile_method(&nodes[0], &nodes[2], &nodes[3]);
+                }
                 let reg = self.curr_func().get_new_reg();
                 self.instrs()
                     .push(Instr::TwoArg(MOVR, Arg::Reg(reg), Arg::Some(0)));
@@ -1092,6 +1103,43 @@ impl<'a> LuaToIR<'a> {
         };
         self.instrs()
             .push(Instr::OneArg(SetTop, Arg::Reg(func_reg)));
+        let exprs = self.get_underlying_exprs(params);
+        if exprs.len() > 0 {
+            // push the arguments to the function
+            for i in 0..(exprs.len() - 1) {
+                let reg = self.compile_expr(exprs[i]);
+                self.instrs().push(Instr::OneArg(PUSH, Arg::Reg(reg)));
+            }
+            self.unpack_to_stack(&exprs.last().unwrap(), false);
+        }
+        self.instrs().push(Instr::OneArg(CALL, Arg::Reg(func_reg)));
+    }
+
+    /// Compile a method.
+    fn compile_method(&mut self, func: &'a Node<u8>, name: &'a Node<u8>, params: &'a Node<u8>) {
+        let prefix_reg = self.compile_prefix_exp(func);
+        let name = self.get_str(name).to_string();
+        let name_reg = self.curr_func().get_new_reg();
+        self.instrs()
+            .push(Instr::TwoArg(MOV, Arg::Reg(name_reg), Arg::Str(name)));
+        let func_reg = self.curr_func().get_new_reg();
+        self.instrs().push(Instr::ThreeArg(
+            GetAttr,
+            Arg::Reg(func_reg),
+            Arg::Reg(prefix_reg),
+            Arg::Reg(name_reg),
+        ));
+        let params = match *params {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_ARGS => &nodes[1],
+            _ => panic!("Missing node <args> from <functioncall>"),
+        };
+        self.instrs()
+            .push(Instr::OneArg(SetTop, Arg::Reg(func_reg)));
+        self.instrs()
+            .push(Instr::OneArg(PUSH, Arg::Reg(prefix_reg)));
         let exprs = self.get_underlying_exprs(params);
         if exprs.len() > 0 {
             // push the arguments to the function
