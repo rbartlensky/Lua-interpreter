@@ -752,6 +752,10 @@ impl<'a> LuaToIR<'a> {
                 nodes: _,
             } if ridx == lua5_3_y::R_PREFIXEXP => self.compile_prefix_exp(node),
             Nonterm {
+                ridx: RIdx(ridx),
+                nodes: _,
+            } if ridx == lua5_3_y::R_TABLECONSTRUCTOR => self.compile_table_cons(node),
+            Nonterm {
                 ridx: RIdx(_ridx),
                 ref nodes,
             } => {
@@ -790,6 +794,12 @@ impl<'a> LuaToIR<'a> {
                             Arg::Reg(new_reg),
                             Arg::Str(value[1..(value.len() - 1)].to_string()),
                         ));
+                        new_reg
+                    }
+                    lua5_3_l::T_NIL => {
+                        let new_reg = self.curr_func().get_new_reg();
+                        self.instrs()
+                            .push(Instr::TwoArg(MOV, Arg::Reg(new_reg), Arg::Nil));
                         new_reg
                     }
                     lua5_3_l::T_NAME => self.find_name(value),
@@ -1407,6 +1417,96 @@ impl<'a> LuaToIR<'a> {
             Arg::Reg(end_reg),
         )];
         self.compile_and_short_circuit2(zero_cmp_reg, right_instrs)
+    }
+
+    fn compile_table_cons(&mut self, node: &'a Node<u8>) -> usize {
+        match *node {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_TABLECONSTRUCTOR => {
+                let table_reg = self.curr_func().get_new_reg();
+                self.instrs()
+                    .push(Instr::TwoArg(MOV, Arg::Reg(table_reg), Arg::Table));
+                let fields = self.compile_field_list(&nodes[1]);
+                self.compile_fields(table_reg, fields);
+                table_reg
+            }
+            _ => panic!("Expected <tableconstructor>; got {:?}", node),
+        }
+    }
+
+    fn compile_field_list(&self, node: &'a Node<u8>) -> Vec<&'a Node<u8>> {
+        let mut fields = vec![];
+        match *node {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_FIELDLISTOPT => {
+                if nodes.len() > 0 {
+                    fields.extend(self.compile_field_list(&nodes[0]));
+                }
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_FIELDLIST => {
+                if nodes.len() > 1 {
+                    fields.extend(self.compile_field_list(&nodes[0]));
+                    fields.push(&nodes[2]);
+                } else {
+                    fields.push(&nodes[0]);
+                }
+            }
+            _ => panic!("Expected <fieldlistopt> or <fieldlist>; got {:?}", node),
+        }
+        fields
+    }
+
+    fn compile_fields(&mut self, table_reg: usize, fields: Vec<&'a Node<u8>>) {
+        let mut int_index = 1;
+        for field in fields {
+            match *field {
+                Nonterm {
+                    ridx: RIdx(ridx),
+                    ref nodes,
+                } if ridx == lua5_3_y::R_FIELD => {
+                    // nodes = [<LSQUARE>, <exp>, <RSQUARE>, <EQ>, <exp>]
+                    let (attr_reg, val_reg) = if nodes.len() == 5 {
+                        let attr_reg = self.compile_expr(&nodes[1]);
+                        let val_reg = self.compile_expr(&nodes[4]);
+                        (attr_reg, val_reg)
+                    } else if nodes.len() == 3 {
+                        let attr_reg = self.curr_func().get_new_reg();
+                        let string = self.get_str(&nodes[0]).to_string();
+                        self.instrs().push(Instr::TwoArg(
+                            MOV,
+                            Arg::Reg(attr_reg),
+                            Arg::Str(string),
+                        ));
+                        let val_reg = self.compile_expr(&nodes[2]);
+                        (attr_reg, val_reg)
+                    } else {
+                        let attr_reg = self.curr_func().get_new_reg();
+                        self.instrs().push(Instr::TwoArg(
+                            MOV,
+                            Arg::Reg(attr_reg),
+                            Arg::Int(int_index),
+                        ));
+                        int_index += 1;
+                        let val_reg = self.compile_expr(&nodes[0]);
+                        (attr_reg, val_reg)
+                    };
+                    self.instrs().push(Instr::ThreeArg(
+                        SetAttr,
+                        Arg::Reg(table_reg),
+                        Arg::Reg(attr_reg),
+                        Arg::Reg(val_reg),
+                    ));
+                }
+                _ => panic!("Expected <field>; got {:?}", field),
+            }
+        }
     }
 }
 

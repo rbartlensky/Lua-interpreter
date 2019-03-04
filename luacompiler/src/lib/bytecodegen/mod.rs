@@ -106,7 +106,9 @@ impl<'a> LuaIRToLuaBc<'a> {
                         Arg::Int(i) => (Opcode::LDI, self.const_map.get_int(i)),
                         Arg::Float(f) => (Opcode::LDF, self.const_map.get_float(f.to_string())),
                         Arg::Str(ref s) => (Opcode::LDS, self.const_map.get_str(s.clone())),
-                        _ => (Opcode::MOV, 0),
+                        Arg::Nil => (Opcode::LDN, 0),
+                        Arg::Table => (Opcode::LDT, 0),
+                        _ => panic!("Mov shouldn't have {:?} as an argument.", arg2),
                     };
                     instrs.push(make_instr(opcode, arg1.get_reg() as u8, arg2 as u8, 0))
                 }

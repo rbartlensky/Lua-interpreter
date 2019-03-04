@@ -1,6 +1,7 @@
 use errors::LuaError;
-use lua_values::LuaVal;
+use lua_values::{lua_table::UserTable, LuaVal};
 use luacompiler::bytecode::instructions::{first_arg, second_arg};
+use std::collections::HashMap;
 use Vm;
 
 pub fn mov(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
@@ -28,5 +29,16 @@ pub fn lds(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     // we also want to save the index of the string in the constant table in order to
     // speed up lookups in _ENV
     vm.registers[first_arg(instr) as usize] = LuaVal::from((val.to_string(), arg2 as usize));
+    Ok(())
+}
+
+pub fn ldn(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
+    vm.registers[first_arg(instr) as usize] = LuaVal::new();
+    Ok(())
+}
+
+pub fn ldt(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
+    let val = UserTable::new(HashMap::new());
+    vm.registers[first_arg(instr) as usize] = LuaVal::from(val);
     Ok(())
 }

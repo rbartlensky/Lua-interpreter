@@ -3,6 +3,7 @@ use irgen::opcodes::IROpcode;
 #[derive(PartialEq, Debug, Clone)]
 pub enum Arg {
     Nil,
+    Table,
     Int(i64),
     Float(f64),
     Str(String),

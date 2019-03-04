@@ -61,7 +61,7 @@ pub fn lua_assert(vm: &mut Vm) -> Result<(), LuaError> {
         Ok(())
     } else {
         let message = if args_count > 1 {
-            vm.stack[args_start + args_count].to_string()?
+            vm.stack[args_start + args_count - 1].to_string()?
         } else {
             "assertion failed!".to_string()
         };
