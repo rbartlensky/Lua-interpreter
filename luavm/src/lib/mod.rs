@@ -19,7 +19,7 @@ use instructions::{
     arithmetic_operators::*, control::*, functions::*, loads::*, relational_operators::*,
     tables::*, upvals::*,
 };
-use lua_std::io::get_io_module;
+use lua_std::{io::get_io_module, string::get_string_module};
 use lua_values::{
     lua_closure::{LuaClosure, UserFunction},
     lua_table::{CachingTable, UserTable},
@@ -167,6 +167,12 @@ impl Vm {
         let io = get_io_module();
         env.set_attr(Vm::get_string_lua_val(io.0.as_str(), rev_strings), io.1)
             .unwrap();
+        let string = get_string_module();
+        env.set_attr(
+            Vm::get_string_lua_val(string.0.as_str(), rev_strings),
+            string.1,
+        )
+        .unwrap();
     }
 
     pub fn closure(&self) -> &Gc<Box<LuaClosure>> {
