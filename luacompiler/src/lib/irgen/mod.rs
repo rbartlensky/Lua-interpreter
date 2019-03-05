@@ -221,7 +221,7 @@ impl<'a> LuaToIR<'a> {
         self.curr_block = old_block;
     }
 
-    pub fn create_child_block(&mut self) -> usize {
+    fn create_child_block(&mut self) -> usize {
         let parent = self.curr_block;
         self.generate_phis_for_bb(parent);
         let curr_block = self.curr_func().create_block_with_parents(vec![parent]);
@@ -345,6 +345,8 @@ impl<'a> LuaToIR<'a> {
                     }
                     _ => {}
                 }
+            } else if is_term(&stat_nodes[0], lua5_3_l::T_DO) {
+                self.compile_do_block(&stat_nodes[1]);
             } else {
                 match (&stat_nodes[0], &stat_nodes[1]) {
                     // stat_nodes = [<function>, <funcname>, <funcbody>]
@@ -834,6 +836,7 @@ impl<'a> LuaToIR<'a> {
 
     fn compile_funcbody(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
         let old_curr_func = self.curr_func;
+        let old_curr_block = self.curr_block;
         // create a new `CompiledFunc` for this function
         let new_func_id = self.functions.len();
         let param_nodes = get_nodes(&nodes[1], lua5_3_y::R_PARLIST);
@@ -846,12 +849,14 @@ impl<'a> LuaToIR<'a> {
         self.functions.push(new_func);
         self.curr_func = new_func_id;
         let new_basic_block = self.curr_func().create_block();
+        self.curr_block = new_basic_block;
         // make the first N registers point to the first N parameters
         self.compile_param_list(&nodes[1]);
         self.compile_block_in_basic_block(&nodes[3], new_basic_block);
         // restore the old state so that we can create a closure instruction
         // in the outer function
         self.curr_func = old_curr_func;
+        self.curr_block = old_curr_block;
         let reg = self.curr_func().get_new_reg();
         self.instrs().push(Instr::TwoArg(
             CLOSURE,
@@ -1554,6 +1559,34 @@ impl<'a> LuaToIR<'a> {
                 }
                 _ => panic!("Expected <field>; got {:?}", field),
             }
+        }
+    }
+
+    fn compile_do_block(&mut self, node: &'a Node<u8>) {
+        match *node {
+            Nonterm {
+                ridx: RIdx(ridx),
+                nodes: _,
+            } if ridx == lua5_3_y::R_BLOCK => {
+                // the block before the `do` block
+                let main_block = self.curr_block;
+                self.generate_phis_for_bb(main_block);
+                // the `do` block
+                let child_block = self.create_child_block();
+                self.compile_block_in_basic_block(node, child_block);
+                // last block of the `do` block
+                let last_block = self.curr_func().blocks().len() - 1;
+                self.generate_phis_for_bb(last_block);
+                // merge block between last_block and main_block
+                let new_curr = self.curr_func().create_block_with_parents(vec![last_block]);
+                self.curr_func()
+                    .get_mut_block(new_curr)
+                    .push_dominator(main_block);
+                self.curr_block = new_curr;
+                self.generate_phis(main_block);
+                self.curr_block = new_curr;
+            }
+            _ => panic!("Expected <block>; found {:?}", node),
         }
     }
 }
