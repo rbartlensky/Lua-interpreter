@@ -13,6 +13,14 @@ pub enum Arg {
 }
 
 impl Arg {
+    pub fn is_reg(&self) -> bool {
+        if let Arg::Reg(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn get_reg(&self) -> usize {
         if let Arg::Reg(reg) = self {
             *reg
@@ -66,36 +74,36 @@ impl Instr {
         }
     }
 
-    pub fn replace_regs_with(&mut self, regs: &[Arg], with: &Arg) {
+    pub fn replace_regs_with(&mut self, regs: &[usize], with: usize) {
         match *self {
             Instr::OneArg(_, ref mut arg) => {
-                if regs.contains(arg) {
-                    *arg = with.clone()
+                if arg.is_reg() && regs.contains(&arg.get_reg()) {
+                    *arg = Arg::Reg(with)
                 }
             }
             Instr::TwoArg(_, ref mut arg1, ref mut arg2) => {
-                if regs.contains(arg1) {
-                    *arg1 = with.clone()
+                if arg1.is_reg() && regs.contains(&arg1.get_reg()) {
+                    *arg1 = Arg::Reg(with)
                 }
-                if regs.contains(arg2) {
-                    *arg2 = with.clone()
+                if arg2.is_reg() && regs.contains(&arg2.get_reg()) {
+                    *arg2 = Arg::Reg(with)
                 }
             }
             Instr::ThreeArg(_, ref mut arg1, ref mut arg2, ref mut arg3) => {
-                if regs.contains(arg1) {
-                    *arg1 = with.clone()
+                if arg1.is_reg() && regs.contains(&arg1.get_reg()) {
+                    *arg1 = Arg::Reg(with)
                 }
-                if regs.contains(arg2) {
-                    *arg2 = with.clone()
+                if arg2.is_reg() && regs.contains(&arg2.get_reg()) {
+                    *arg2 = Arg::Reg(with)
                 }
-                if regs.contains(arg3) {
-                    *arg3 = with.clone()
+                if arg3.is_reg() && regs.contains(&arg3.get_reg()) {
+                    *arg3 = Arg::Reg(with)
                 }
             }
             Instr::NArg(_, ref mut args) => {
                 for i in 0..args.len() {
-                    if regs.contains(&args[i]) {
-                        args[i] = with.clone();
+                    if args[i].is_reg() && regs.contains(&args[i].get_reg()) {
+                        args[i] = Arg::Reg(with);
                     }
                 }
             }

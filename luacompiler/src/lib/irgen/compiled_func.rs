@@ -154,7 +154,7 @@ impl<'a> BasicBlock<'a> {
         &self.non_locals
     }
 
-    pub fn replace_regs_with(&mut self, regs: &[Arg], with: &Arg) {
+    pub fn replace_regs_with(&mut self, regs: &[usize], with: usize) {
         for mut instr in &mut self.instrs {
             instr.replace_regs_with(regs, with);
         }
