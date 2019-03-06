@@ -79,8 +79,7 @@ impl<'a> BasicBlock<'a> {
         self.dominators.push(bb);
     }
 
-    pub fn set_reg_name(&mut self, reg: usize, name: &'a str, is_local_decl: bool) -> usize {
-        let mut new_regs = reg;
+    pub fn set_reg_name(&mut self, reg: usize, name: &'a str, is_local_decl: bool) {
         let mut instrs = vec![];
         // `local <name> = ...` is declared
         if is_local_decl {
@@ -88,16 +87,14 @@ impl<'a> BasicBlock<'a> {
             if let Some(non_locals_vec) = self.non_locals.get_mut(name) {
                 // we modified an outer variable multiple times, thus emit a phi
                 if non_locals_vec.len() > 1 {
-                    new_regs += 1;
-                    BasicBlock::gen_phi(&mut instrs, non_locals_vec, new_regs);
+                    BasicBlock::gen_phi(&mut instrs, non_locals_vec);
                 }
             }
             self.locals
                 .entry(name)
                 .and_modify(|locals_vec| {
                     if locals_vec.len() > 1 {
-                        new_regs += 1;
-                        BasicBlock::gen_phi(&mut instrs, locals_vec, new_regs);
+                        BasicBlock::gen_phi(&mut instrs, locals_vec);
                     }
                     locals_vec[0] = reg;
                 })
@@ -105,46 +102,40 @@ impl<'a> BasicBlock<'a> {
         } else {
             if let Entry::Occupied(mut locals) = self.locals.entry(name) {
                 locals.get_mut().push(reg);
-                return 0;
+                return;
             }
             let non_local_entry = self.non_locals.entry(name);
             if let Entry::Occupied(mut non_locals) = non_local_entry {
                 non_locals.get_mut().push(reg);
-                return 0;
+                return;
             }
             non_local_entry.or_insert(vec![reg]);
         }
         self.instrs.extend(instrs);
-        new_regs - reg
     }
 
-    fn gen_phi(instrs: &mut Vec<Instr>, var_vec: &mut Vec<usize>, merge_reg: usize) {
-        let mut phi_args: Vec<Arg> = vec![Arg::Reg(merge_reg)];
-        let extra_args: Vec<Arg> = var_vec.iter().map(|r| Arg::Reg(*r)).collect();
-        phi_args.extend(extra_args);
+    fn gen_phi(instrs: &mut Vec<Instr>, var_vec: &mut Vec<usize>) {
+        let merge_reg = var_vec[0];
+        let phi_args: Vec<Arg> = var_vec.iter().map(|r| Arg::Reg(*r)).collect();
         let phi = Instr::NArg(IROpcode::Phi, phi_args);
         instrs.push(phi);
         var_vec.clear();
         var_vec.push(merge_reg);
     }
 
-    pub fn generate_phis(&mut self, start_reg: usize) -> usize {
+    pub fn generate_phis(&mut self) {
         let mut instrs = vec![];
-        let mut new_regs = start_reg;
         for (_, non_locals) in self.non_locals.iter_mut() {
             if non_locals.len() > 1 {
-                BasicBlock::gen_phi(&mut instrs, non_locals, new_regs);
-                new_regs += 1;
+                BasicBlock::gen_phi(&mut instrs, non_locals);
             }
         }
         for (_, locals) in self.locals.iter_mut() {
             if locals.len() > 1 {
-                BasicBlock::gen_phi(&mut instrs, locals, new_regs);
-                new_regs += 1;
+                BasicBlock::gen_phi(&mut instrs, locals);
             }
         }
         self.instrs.extend(instrs);
-        new_regs - start_reg
     }
 
     pub fn get_reg(&self, name: &'a str) -> Option<usize> {

@@ -87,15 +87,7 @@ impl<'a> LuaToIR<'a> {
         let new_block = self.curr_func().create_block();
         self.compile_block_in_basic_block(&self.pt.tree, new_block);
         for mut func in &mut self.functions {
-            let reg_count = func.reg_count();
-            let new_regs = func
-                .get_mut_blocks()
-                .last_mut()
-                .unwrap()
-                .generate_phis(reg_count);
-            for _ in 0..new_regs {
-                func.get_new_reg();
-            }
+            func.get_mut_blocks().last_mut().unwrap().generate_phis();
         }
         LuaIR::new(self.functions, 0)
     }
@@ -122,18 +114,11 @@ impl<'a> LuaToIR<'a> {
     }
 
     fn set_reg_name(&mut self, reg: usize, name: &'a str, local_decl: bool) {
-        let new_regs_count = self.curr_block().set_reg_name(reg, name, local_decl);
-        for _ in 0..new_regs_count {
-            self.curr_func().get_new_reg();
-        }
+        self.curr_block().set_reg_name(reg, name, local_decl);
     }
 
     fn generate_phis_for_bb(&mut self, bb: usize) {
-        let reg_count = self.curr_func().reg_count();
-        let new_regs = self.curr_func().get_mut_block(bb).generate_phis(reg_count);
-        for _ in 0..new_regs {
-            self.curr_func().get_new_reg();
-        }
+        self.curr_func().get_mut_block(bb).generate_phis();
     }
 
     fn get_upval(&mut self, name: &'a str) -> Option<usize> {
@@ -1310,10 +1295,8 @@ impl<'a> LuaToIR<'a> {
                     .expect("Non-local found in branch, but not in parent blocks!"),
             );
             let mut args: Vec<Arg> = args.iter().map(|v| Arg::Reg(*v)).collect();
-            let new_reg = self.curr_func().get_new_reg();
-            args.insert(0, Arg::Reg(new_reg));
             let local_decl = self.is_locally_declared_in_doms(name);
-            self.set_reg_name(new_reg, name, local_decl);
+            self.set_reg_name(args.first().unwrap().get_reg(), name, local_decl);
             self.instrs().push(Instr::NArg(Phi, args));
         }
     }
@@ -1854,9 +1837,9 @@ mod tests {
             Instr::TwoArg(MOV, Reg(9), Nil),
             Instr::ThreeArg(SetUpAttr, Some(0), Str("a".to_string()), Reg(8)),
             Instr::ThreeArg(SetUpAttr, Some(0), Str("b".to_string()), Reg(9)),
-            Instr::NArg(Phi, vec![Reg(10), Reg(0), Reg(4)]),
-            Instr::NArg(Phi, vec![Reg(11), Reg(1), Reg(5)]),
-            Instr::NArg(Phi, vec![Reg(12), Reg(2), Reg(6)]),
+            Instr::NArg(Phi, vec![Reg(0), Reg(4)]),
+            Instr::NArg(Phi, vec![Reg(1), Reg(5)]),
+            Instr::NArg(Phi, vec![Reg(2), Reg(6)]),
         ];
         assert!(ir.functions.len() == 1);
         let blocks = &ir.functions[0].blocks();
@@ -2104,7 +2087,7 @@ mod tests {
             ],
             vec![Instr::NArg(
                 Phi,
-                vec![Reg(7), Reg(1), Reg(3), Reg(4), Reg(5), Reg(6)],
+                vec![Reg(1), Reg(3), Reg(4), Reg(5), Reg(6)],
             )],
         ];
         let expected_parents = vec![
@@ -2163,7 +2146,7 @@ mod tests {
                 Instr::TwoArg(MOV, Reg(3), Int(3)),
                 Instr::OneArg(Jmp, Some(4)),
             ],
-            vec![Instr::NArg(Phi, vec![Reg(4), Reg(1), Reg(2), Reg(3)])],
+            vec![Instr::NArg(Phi, vec![Reg(1), Reg(2), Reg(3)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![0], vec![2], vec![2, 1, 3]];
         let expected_dominators = vec![vec![], vec![0], vec![0], vec![2], vec![2]];
@@ -2203,11 +2186,8 @@ mod tests {
                 Instr::TwoArg(MOV, Reg(3), Int(3)),
                 Instr::OneArg(Jmp, Some(3)),
             ],
-            vec![
-                Instr::NArg(Phi, vec![Reg(4), Reg(2)]),
-                Instr::OneArg(Jmp, Some(4)),
-            ],
-            vec![Instr::NArg(Phi, vec![Reg(5), Reg(1), Reg(4)])],
+            vec![Instr::NArg(Phi, vec![Reg(2)]), Instr::OneArg(Jmp, Some(4))],
+            vec![Instr::NArg(Phi, vec![Reg(1), Reg(2)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![1], vec![1, 2], vec![0, 3]];
         let expected_dominators = vec![vec![], vec![0], vec![1], vec![1], vec![0]];
@@ -2253,11 +2233,8 @@ mod tests {
                 Instr::TwoArg(MOV, Reg(4), Int(4)),
                 Instr::OneArg(Jmp, Some(4)),
             ],
-            vec![
-                Instr::NArg(Phi, vec![Reg(5), Reg(2)]),
-                Instr::OneArg(Jmp, Some(5)),
-            ],
-            vec![Instr::NArg(Phi, vec![Reg(6), Reg(1), Reg(5)])],
+            vec![Instr::NArg(Phi, vec![Reg(2)]), Instr::OneArg(Jmp, Some(5))],
+            vec![Instr::NArg(Phi, vec![Reg(1), Reg(2)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![1], vec![1], vec![2, 3], vec![0, 4]];
         let expected_dominators = vec![vec![], vec![0], vec![1], vec![1], vec![1], vec![0]];
@@ -2292,7 +2269,7 @@ mod tests {
                 Instr::ThreeArg(ADD, Reg(3), Reg(1), Reg(2)),
                 Instr::OneArg(Jmp, Some(1)),
             ],
-            vec![Instr::NArg(Phi, vec![Reg(4), Reg(1), Reg(3)])],
+            vec![Instr::NArg(Phi, vec![Reg(1), Reg(3)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![1], vec![1]];
         let expected_dominators = vec![vec![], vec![0], vec![1], vec![0]];
@@ -2499,25 +2476,25 @@ mod tests {
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(2)),
                 Instr::TwoArg(MOV, Reg(1), Int(3)),
-                Instr::NArg(Phi, vec![Reg(2), Reg(0), Reg(1)]),
-                Instr::ThreeArg(JmpNE, Reg(2), Some(1), Some(2)),
+                Instr::NArg(Phi, vec![Reg(0), Reg(1)]),
+                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
             ],
             vec![
-                Instr::TwoArg(MOV, Reg(3), Int(4)),
-                Instr::TwoArg(MOV, Reg(4), Int(5)),
-                Instr::TwoArg(MOV, Reg(5), Int(6)),
-                Instr::NArg(Phi, vec![Reg(6), Reg(3), Reg(4)]),
-                Instr::TwoArg(MOV, Reg(7), Int(7)),
-                Instr::TwoArg(MOV, Reg(8), Int(8)),
-                Instr::NArg(Phi, vec![Reg(9), Reg(5), Reg(7)]),
-                Instr::TwoArg(MOV, Reg(10), Int(9)),
-                Instr::NArg(Phi, vec![Reg(11), Reg(8), Reg(10)]),
+                Instr::TwoArg(MOV, Reg(2), Int(4)),
+                Instr::TwoArg(MOV, Reg(3), Int(5)),
+                Instr::TwoArg(MOV, Reg(4), Int(6)),
+                Instr::NArg(Phi, vec![Reg(2), Reg(3)]),
+                Instr::TwoArg(MOV, Reg(5), Int(7)),
+                Instr::TwoArg(MOV, Reg(6), Int(8)),
+                Instr::NArg(Phi, vec![Reg(4), Reg(5)]),
+                Instr::TwoArg(MOV, Reg(7), Int(9)),
+                Instr::NArg(Phi, vec![Reg(6), Reg(7)]),
                 Instr::OneArg(Jmp, Some(2)),
             ],
             vec![
-                Instr::NArg(Phi, vec![Reg(12), Reg(2), Reg(6)]),
-                Instr::TwoArg(MOV, Reg(13), Int(10)),
-                Instr::NArg(Phi, vec![Reg(14), Reg(12), Reg(13)]),
+                Instr::NArg(Phi, vec![Reg(0), Reg(2)]),
+                Instr::TwoArg(MOV, Reg(8), Int(10)),
+                Instr::NArg(Phi, vec![Reg(0), Reg(8)]),
             ],
         ];
         for (i, block) in ir.functions[0].blocks().iter().enumerate() {
@@ -2564,12 +2541,12 @@ mod tests {
                 Instr::OneArg(Jmp, Some(3)),
             ],
             vec![
-                Instr::NArg(Phi, vec![Reg(8), Reg(3), Reg(7)]),
-                Instr::TwoArg(MOV, Reg(9), Int(1)),
-                Instr::ThreeArg(ADD, Reg(10), Reg(0), Reg(9)),
+                Instr::NArg(Phi, vec![Reg(3), Reg(7)]),
+                Instr::TwoArg(MOV, Reg(8), Int(1)),
+                Instr::ThreeArg(ADD, Reg(9), Reg(0), Reg(8)),
                 Instr::OneArg(Jmp, Some(1)),
             ],
-            vec![Instr::NArg(Phi, vec![Reg(11), Reg(0), Reg(10)])],
+            vec![Instr::NArg(Phi, vec![Reg(0), Reg(9)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![1], vec![2], vec![3], vec![3], vec![1]];
         let expected_dominators =
