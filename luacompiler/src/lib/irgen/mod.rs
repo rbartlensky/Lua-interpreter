@@ -770,6 +770,12 @@ impl<'a> LuaToIR<'a> {
             } => {
                 if nodes.len() == 1 {
                     self.compile_expr(&nodes[0])
+                } else if nodes.len() == 2 {
+                    let right = self.compile_expr(&nodes[1]);
+                    let new_var = self.curr_func().get_new_reg();
+                    let instr = self.get_unary_instr(&nodes[0], new_var, right);
+                    self.instrs().push(instr);
+                    new_var
                 } else {
                     debug_assert!(nodes.len() == 3);
                     let left = self.compile_expr(&nodes[0]);
@@ -1174,6 +1180,19 @@ impl<'a> LuaToIR<'a> {
             }
         }
         false
+    }
+
+    /// Get the appropriate instruction for a given Node::Term.
+    fn get_unary_instr(&self, node: &'a Node<u8>, reg: usize, rreg: usize) -> Instr {
+        if let Term { lexeme } = node {
+            let opcode = match lexeme.tok_id() {
+                lua5_3_l::T_MINUS => UMN,
+                _ => unimplemented!("Unary instruction {:#?}", node),
+            };
+            Instr::TwoArg(opcode, Arg::Reg(reg), Arg::Reg(rreg))
+        } else {
+            panic!("Expected a Node::Term!");
+        }
     }
 
     /// Get the appropriate instruction for a given Node::Term.

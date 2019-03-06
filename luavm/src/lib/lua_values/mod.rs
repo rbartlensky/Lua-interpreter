@@ -86,6 +86,22 @@ impl LuaVal {
         (LuaValKind::BOXED ^ self.val) as *mut Box<LuaObj>
     }
 
+    pub fn is_int(&self) -> bool {
+        match self.kind() {
+            LuaValKind::INT => true,
+            LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_int() },
+            _ => false,
+        }
+    }
+
+    pub fn is_float(&self) -> bool {
+        match self.kind() {
+            LuaValKind::FLOAT => true,
+            LuaValKind::BOXED => unsafe { (*self.as_boxed()).is_float() },
+            _ => false,
+        }
+    }
+
     pub fn is_number(&self) -> bool {
         match self.kind() {
             LuaValKind::INT | LuaValKind::FLOAT => true,
@@ -251,6 +267,16 @@ impl LuaVal {
             return Ok(unsafe { (*closure_ptr(self.val)).clone() });
         }
         Err(LuaError::NotAClosure)
+    }
+
+    pub fn negate_number(&self) -> Result<LuaVal, LuaError> {
+        if self.is_int() {
+            Ok(LuaVal::from(-self.to_int()?))
+        } else if self.is_float() {
+            Ok(LuaVal::from(-self.to_float()?))
+        } else {
+            Err(LuaError::Error("Cannot negate non-numbers!".to_string()))
+        }
     }
 }
 
@@ -527,6 +553,7 @@ mod tests {
         let main_clone = main.clone();
         assert_eq!(main_clone.val, main.val);
         assert_eq!(main_clone.kind(), main.kind());
+        assert_eq!(main.negate_number().unwrap().to_int().unwrap(), -1);
     }
 
     #[test]

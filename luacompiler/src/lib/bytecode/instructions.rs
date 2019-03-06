@@ -95,6 +95,7 @@ pub fn format_instr(instr: u32) -> String {
         32 => "SetUpval",
         33 => "Ldn",
         34 => "Ldt",
+        35 => "Umn",
         _ => unreachable!("No such opcode: {}", opcode(instr)),
     };
     format!(
@@ -155,6 +156,7 @@ pub enum Opcode {
     SetUpVal = 32, // UpVals[Arg(1)] = R(2)
     LDN = 33,      // R(1) = Nil
     LDT = 34,      // R(1) = {}
+    UMN = 35,      // R(1) = -R(2)
 }
 
 #[cfg(test)]

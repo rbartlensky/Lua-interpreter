@@ -32,6 +32,7 @@ pub enum IROpcode {
     JmpEQ,
     GetUpVal,
     SetUpVal,
+    UMN,
     Phi,
 }
 
@@ -68,6 +69,7 @@ impl IROpcode {
             IROpcode::JmpEQ => Opcode::JmpEQ,
             IROpcode::GetUpVal => Opcode::GetUpVal,
             IROpcode::SetUpVal => Opcode::SetUpVal,
+            IROpcode::UMN => Opcode::UMN,
             _ => panic!("Cannot convert {:?} to opcode!", self),
         }
     }

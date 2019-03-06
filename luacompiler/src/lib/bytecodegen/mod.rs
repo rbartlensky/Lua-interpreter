@@ -260,6 +260,18 @@ impl<'a> LuaIRToLuaBc<'a> {
                     panic!("SetUpVal should be a Instr::TwoArg instruction!")
                 }
             }
+            UMN => {
+                if let Instr::TwoArg(_, arg1, arg2) = instr {
+                    instrs.push(make_instr(
+                        opcode.to_opcode(),
+                        arg1.get_reg() as u8,
+                        arg2.get_reg() as u8,
+                        0,
+                    ))
+                } else {
+                    panic!("UMN should be a Instr::TwoArg instruction!")
+                }
+            }
             // ignore phis as we have already processed them
             Phi => {}
         }

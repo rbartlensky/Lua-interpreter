@@ -30,3 +30,9 @@ bin_op!(div);
 bin_op!(modulus);
 bin_op!(fdiv);
 bin_op!(exp);
+
+pub fn umn(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
+    let val = vm.registers[second_arg(instr) as usize].negate_number()?;
+    vm.registers[first_arg(instr) as usize] = val;
+    Ok(())
+}

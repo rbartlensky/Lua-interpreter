@@ -4,6 +4,8 @@ use errors::LuaError;
 pub trait LuaObj {
     /// Clones the underlying type, and returns a box of it.
     fn clone_box(&self) -> Box<LuaObj>;
+    fn is_int(&self) -> bool;
+    fn is_float(&self) -> bool;
     /// Checks whther the underlying type is a float or an int.
     fn is_number(&self) -> bool;
     /// Returns true if the underlying type is either a float or a string.
@@ -49,6 +51,14 @@ impl LuaObj for LuaInt {
         Ok(self.v)
     }
 
+    fn is_int(&self) -> bool {
+        true
+    }
+
+    fn is_float(&self) -> bool {
+        false
+    }
+
     fn is_number(&self) -> bool {
         true
     }
@@ -77,6 +87,14 @@ pub struct LuaFloat {
 impl LuaObj for LuaFloat {
     fn clone_box(&self) -> Box<LuaObj> {
         Box::new(LuaFloat { v: self.v })
+    }
+
+    fn is_int(&self) -> bool {
+        false
+    }
+
+    fn is_float(&self) -> bool {
+        true
     }
 
     fn is_number(&self) -> bool {
@@ -116,6 +134,14 @@ impl LuaObj for LuaString {
             v: self.v.clone(),
             const_index: self.const_index,
         })
+    }
+
+    fn is_int(&self) -> bool {
+        false
+    }
+
+    fn is_float(&self) -> bool {
+        false
     }
 
     fn is_number(&self) -> bool {
