@@ -196,6 +196,17 @@ impl<'a> LuaToIR<'a> {
         None
     }
 
+    fn is_locally_declared_in_doms(&self, name: &'a str) -> bool {
+        let curr_func = &self.functions[self.curr_func];
+        let curr_block = curr_func.get_block(self.curr_block);
+        for &d in curr_block.dominators() {
+            if curr_func.get_block(d).locals().contains_key(name) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn is_local(&self, name: &'a str) -> bool {
         self.get_reg(name).is_some()
     }
@@ -1267,7 +1278,7 @@ impl<'a> LuaToIR<'a> {
         self.generate_phis(before_if_index);
     }
 
-    fn generate_phis(&mut self, main_block: usize) {
+    fn generate_phis(&mut self, extra_lookup_block: usize) {
         let mut phis: HashMap<&'a str, BTreeSet<usize>> = HashMap::new();
         {
             let curr_func = &self.functions[self.curr_func];
@@ -1276,30 +1287,33 @@ impl<'a> LuaToIR<'a> {
             for &p in curr_block
                 .parents()
                 .iter()
-                .chain(vec![curr_block_index, main_block].iter())
+                .chain(vec![curr_block_index, extra_lookup_block].iter())
             {
                 for (name, ref reg) in curr_func.get_block(p).non_locals() {
-                    phis.entry(name)
-                        .and_modify(|args| {
-                            args.insert(*reg.last().unwrap());
-                        })
-                        .or_insert_with(|| {
-                            let mut new_set = BTreeSet::new();
-                            new_set.insert(*reg.last().unwrap());
-                            new_set
-                        });
+                    if self.is_local(name) {
+                        phis.entry(name)
+                            .and_modify(|args| {
+                                args.insert(*reg.last().unwrap());
+                            })
+                            .or_insert_with(|| {
+                                let mut new_set = BTreeSet::new();
+                                new_set.insert(*reg.last().unwrap());
+                                new_set
+                            });
+                    }
                 }
             }
         }
         for (name, mut args) in phis {
             args.insert(
-                self.get_reg_from_block(name, self.curr_func, main_block)
+                self.get_reg_from_block(name, self.curr_func, self.curr_block)
                     .expect("Non-local found in branch, but not in parent blocks!"),
             );
             let mut args: Vec<Arg> = args.iter().map(|v| Arg::Reg(*v)).collect();
             let new_reg = self.curr_func().get_new_reg();
             args.insert(0, Arg::Reg(new_reg));
-            self.set_reg_name(new_reg, name, false);
+            let local_decl = self.is_locally_declared_in_doms(name);
+            self.set_reg_name(new_reg, name, local_decl);
             self.instrs().push(Instr::NArg(Phi, args));
         }
     }
@@ -1338,23 +1352,37 @@ impl<'a> LuaToIR<'a> {
     }
 
     fn compile_while(&mut self, expr: &'a Node<u8>, block: &'a Node<u8>) {
+        // the block before the while loop
         let parent = self.curr_block;
         self.generate_phis_for_bb(parent);
         // compile expr in a new block, and create a branching instruction to it
         self.curr_block()
             .mut_instrs()
             .push(Instr::OneArg(Jmp, Arg::Some(parent + 1)));
+        // the block in which the condition is compiled
         let cond_start = self.curr_func().create_block_with_parents(vec![parent]);
         self.get_block(cond_start).push_dominator(parent);
         self.curr_block = cond_start;
         let expr_reg = self.compile_expr(expr);
-        let cond_end = self.curr_block;
+        // the expression might generate multiple basic blocks, thus we have to make sure
+        // to save the last block of the whole expression
+        let cond_end = self.curr_func().blocks().len() - 1;
+        self.curr_block = cond_end;
         // compile the while loop block
-        self.compile_while_body(cond_start, cond_end, expr_reg, block, vec![], vec![]);
+        self.compile_while_body(
+            parent,
+            cond_start,
+            cond_end,
+            expr_reg,
+            block,
+            vec![],
+            vec![],
+        );
     }
 
     fn compile_while_body(
         &mut self,
+        parent_of_while: usize,
         while_cond_start: usize,
         while_cond_end: usize,
         expr_reg: usize,
@@ -1362,34 +1390,39 @@ impl<'a> LuaToIR<'a> {
         additional_instrs: Vec<Instr>,
         reg_map_updates: Vec<(usize, &'a str)>,
     ) {
+        // compile the body of the while loop
         let while_block = self.compile_block(block);
-        let last_block = self.curr_func().blocks().len();
+        // again, the block might create multiple blocks; save the last one
+        let last_block = self.curr_func().blocks().len() - 1;
+        // generate a jump from the condition block to `while_block` if the condition
+        // is true, or to `last_block`, which is the block right after the while loop
         self.get_block(while_cond_end)
             .mut_instrs()
             .push(Instr::ThreeArg(
                 JmpNE,
                 Arg::Reg(expr_reg),
                 Arg::Some(while_block),
-                Arg::Some(last_block),
+                Arg::Some(last_block + 1),
             ));
-        self.curr_block = last_block - 1;
-        if !self.curr_block().dominators().contains(&while_cond_end) {
-            self.curr_block().push_dominator(while_cond_end);
-        }
+        self.curr_block = last_block;
+        // add any additional instructions
         self.instrs().extend(additional_instrs);
         for (reg, name) in reg_map_updates {
             self.set_reg_name(reg, name, false);
         }
-        self.generate_phis(while_cond_end);
+        self.generate_phis_for_bb(last_block);
+        // self.generate_phis(parent_of_while);
+        // jump back to the start of the expression evaluation
         self.curr_block()
             .mut_instrs()
             .push(Instr::OneArg(Jmp, Arg::Some(while_cond_start)));
+        // generate the block after the while loop
         let after_block = self
             .curr_func()
             .create_block_with_parents(vec![while_cond_end]);
         self.curr_block = after_block;
-        self.curr_block().push_dominator(while_cond_end);
-        self.generate_phis(last_block - 1);
+        self.curr_block().push_dominator(parent_of_while);
+        self.generate_phis(last_block);
     }
 
     fn compile_for_count(
@@ -1399,7 +1432,7 @@ impl<'a> LuaToIR<'a> {
         exprs: &'a Node<u8>,
         block: &'a Node<u8>,
     ) {
-        self.create_child_block();
+        let block_before_for = self.create_child_block();
         let start_reg = self
             .compile_assignment(name, expr, AssignmentType::LocalDecl)
             .get_reg();
@@ -1435,9 +1468,10 @@ impl<'a> LuaToIR<'a> {
             Arg::Reg(start_reg),
             Arg::Reg(regs[1]),
         )];
-        let while_condition_end = self.curr_block;
+        let while_condition_end = self.curr_func().blocks().len() - 1;
         let reg_map_updates = vec![(new_reg, name.get_str())];
         self.compile_while_body(
+            block_before_for,
             while_condition_start,
             while_condition_end,
             condition_reg,
@@ -2237,7 +2271,7 @@ mod tests {
     }
 
     #[test]
-    fn while_loop() {
+    fn while_loops() {
         let pt = &LuaParseTree::from_str(String::from(
             "local a, b = 2, 1
              while a do
@@ -2256,13 +2290,12 @@ mod tests {
             vec![
                 Instr::TwoArg(MOV, Reg(2), Int(1)),
                 Instr::ThreeArg(ADD, Reg(3), Reg(1), Reg(2)),
-                Instr::NArg(Phi, vec![Reg(4), Reg(1), Reg(3)]),
                 Instr::OneArg(Jmp, Some(1)),
             ],
-            vec![Instr::NArg(Phi, vec![Reg(5), Reg(4)])],
+            vec![Instr::NArg(Phi, vec![Reg(4), Reg(1), Reg(3)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![1], vec![1]];
-        let expected_dominators = vec![vec![], vec![0], vec![1], vec![1]];
+        let expected_dominators = vec![vec![], vec![0], vec![1], vec![0]];
         check_instrs_and_parents(
             &ir,
             1,
@@ -2490,5 +2523,63 @@ mod tests {
         for (i, block) in ir.functions[0].blocks().iter().enumerate() {
             check_eq(block.instrs(), &expected_instrs[i]);
         }
+    }
+
+    #[test]
+    fn nested_while_loops() {
+        let pt = &LuaParseTree::from_str(String::from(
+            "local i = 1
+             while i < 10 do
+               local j = 1
+               while j < 5 do
+                 j = j + 1
+               end
+               i = i + 1
+             end",
+        ))
+        .unwrap();
+        let ir = compile_to_ir(pt);
+        let expected_instrs = vec![
+            vec![
+                Instr::TwoArg(MOV, Reg(0), Int(1)),
+                Instr::OneArg(Jmp, Some(1)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(1), Int(10)),
+                Instr::ThreeArg(LT, Reg(2), Reg(0), Reg(1)),
+                Instr::ThreeArg(JmpNE, Reg(2), Some(2), Some(6)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(3), Int(1)),
+                Instr::OneArg(Jmp, Some(3)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(4), Int(5)),
+                Instr::ThreeArg(LT, Reg(5), Reg(3), Reg(4)),
+                Instr::ThreeArg(JmpNE, Reg(5), Some(4), Some(5)),
+            ],
+            vec![
+                Instr::TwoArg(MOV, Reg(6), Int(1)),
+                Instr::ThreeArg(ADD, Reg(7), Reg(3), Reg(6)),
+                Instr::OneArg(Jmp, Some(3)),
+            ],
+            vec![
+                Instr::NArg(Phi, vec![Reg(8), Reg(3), Reg(7)]),
+                Instr::TwoArg(MOV, Reg(9), Int(1)),
+                Instr::ThreeArg(ADD, Reg(10), Reg(0), Reg(9)),
+                Instr::OneArg(Jmp, Some(1)),
+            ],
+            vec![Instr::NArg(Phi, vec![Reg(11), Reg(0), Reg(10)])],
+        ];
+        let expected_parents = vec![vec![], vec![0], vec![1], vec![2], vec![3], vec![3], vec![1]];
+        let expected_dominators =
+            vec![vec![], vec![0], vec![1], vec![2], vec![3], vec![2], vec![0]];
+        check_instrs_and_parents(
+            &ir,
+            1,
+            &expected_instrs,
+            &expected_parents,
+            &expected_dominators,
+        );
     }
 }

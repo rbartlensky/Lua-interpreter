@@ -109,9 +109,7 @@ impl<'a> BasicBlock<'a> {
             }
             let non_local_entry = self.non_locals.entry(name);
             if let Entry::Occupied(mut non_locals) = non_local_entry {
-                println!("Pushing {}", name);
                 non_locals.get_mut().push(reg);
-                println!("{:?}", non_locals.get_mut());
                 return 0;
             }
             non_local_entry.or_insert(vec![reg]);
@@ -155,6 +153,10 @@ impl<'a> BasicBlock<'a> {
             return res.map(|v| *v.last().unwrap());
         }
         self.non_locals.get(name).map(|v| *v.last().unwrap())
+    }
+
+    pub fn locals(&self) -> &BTreeMap<&'a str, Vec<usize>> {
+        &self.locals
     }
 
     pub fn non_locals(&self) -> &BTreeMap<&'a str, Vec<usize>> {
