@@ -2,6 +2,7 @@ use errors::LuaError;
 use lua_values::{lua_closure::UserFunction, LuaVal};
 use luacompiler::bytecode::instructions::{first_arg, second_arg, *};
 use luacompiler::bytecode::BCProviderType;
+use std::mem::swap;
 use StackFrame;
 use Vm;
 
@@ -42,9 +43,7 @@ pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
 pub fn push(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     let val = vm.registers[first_arg(instr) as usize].clone();
     vm.push(val);
-    let ret_val = vm.closure().ret_vals();
-    vm.closure()
-        .set_ret_vals(ret_val + third_arg(instr) as usize);
+    vm.closure().inc_ret_vals(third_arg(instr) as usize);
     Ok(())
 }
 
@@ -87,8 +86,9 @@ pub fn call(vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
     // push the first `reg_count` registers to the stack, as the called function
     // will modify these
     for i in 0..vm.closure().reg_count() {
-        let reg = vm.registers[i].clone();
-        vm.push(reg);
+        let mut nil = LuaVal::new();
+        swap(&mut nil, &mut vm.registers[i]);
+        vm.push(nil);
     }
     // prepare to move arguments into registers; the callee expects the parameters in its
     // first N registers (excluding 0 which is _ENV), where N is the number of parameters
@@ -111,7 +111,7 @@ pub fn call(vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
     let ret_vals = vm.closure().ret_vals();
     // restore the registers of the caller
     for (reg, i) in ((args_start + args_count)..(vm.top - ret_vals)).enumerate() {
-        std::mem::swap(&mut vm.registers[reg], &mut vm.stack[i]);
+        swap(&mut vm.registers[reg], &mut vm.stack[i]);
     }
     // restore upvals
     pop_upvals(vm, caller_index, callee_index, old_curr_frame)?;
@@ -141,15 +141,16 @@ pub fn call(vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
             // if we are returning values, then the closure's ret_vals counter should be
             // updated as well
             if third_arg(instr) > 1 {
-                let curr_ret_vals = vm.closure().ret_vals();
-                vm.closure().set_ret_vals(curr_ret_vals + ret_vals);
+                vm.closure().inc_ret_vals(ret_vals);
             }
         } else {
             while opcode(instr) == Opcode::MOVR as u8 {
                 let from = second_arg(instr) as usize;
                 // if we don't have enough return values to unpack, we return nils
                 vm.registers[first_arg(instr) as usize] = if from < ret_vals {
-                    vm.stack[vm.top - (ret_vals - from)].clone()
+                    let mut nil = LuaVal::new();
+                    swap(&mut nil, &mut vm.stack[vm.top - (ret_vals - from)]);
+                    nil
                 } else {
                     LuaVal::new()
                 };
@@ -244,10 +245,7 @@ pub fn vararg(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
         }
         if third_arg(instr) > 1 {
             let curr_frame = &mut vm.stack_frames[vm.curr_frame];
-            let ret_val = curr_frame.closure.ret_vals();
-            curr_frame
-                .closure
-                .set_ret_vals(ret_val + args_count - param_count);
+            curr_frame.closure.inc_ret_vals(args_count - param_count);
         }
     } else {
         let curr_frame = &vm.stack_frames[vm.curr_frame];

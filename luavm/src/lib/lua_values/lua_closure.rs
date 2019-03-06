@@ -76,6 +76,10 @@ impl LuaClosure for UserFunction {
         self.ret_vals.set(vals);
     }
 
+    fn inc_ret_vals(&self, amount: usize) {
+        self.ret_vals.set(self.ret_vals.get() + amount);
+    }
+
     fn get_upval(&self, i: usize) -> Result<LuaVal, LuaError> {
         self.upvals
             .borrow()
@@ -126,6 +130,10 @@ impl LuaClosure for BuiltinFunction {
         self.ret_vals.set(vals);
     }
 
+    fn inc_ret_vals(&self, amount: usize) {
+        self.ret_vals.set(self.ret_vals.get() + amount);
+    }
+
     fn get_upval(&self, _: usize) -> Result<LuaVal, LuaError> {
         Err(LuaError::Error(
             "GetUpVal doesn't work on BuiltinFunctions.".to_string(),
@@ -167,6 +175,7 @@ pub trait LuaClosure: Trace + Finalize {
     fn call(&self, vm: &mut Vm) -> Result<(), LuaError>;
     fn ret_vals(&self) -> usize;
     fn set_ret_vals(&self, vals: usize);
+    fn inc_ret_vals(&self, amount: usize);
     fn get_upval(&self, i: usize) -> Result<LuaVal, LuaError>;
     fn set_upval(&self, i: usize, value: LuaVal) -> Result<(), LuaError>;
 }
