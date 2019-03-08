@@ -1,27 +1,12 @@
-use crate::{errors::LuaError, lua_values::LuaVal, stdlib::StdFunction, Vm};
-use gc::{Finalize, Gc, GcCell, Trace};
+use crate::{
+    errors::LuaError,
+    lua_values::{gc_val::GcVal, LuaVal},
+    stdlib::StdFunction,
+    Vm,
+};
+use gc::GcCell;
 use luacompiler::bytecode::Function;
 use std::cell::Cell;
-
-impl Finalize for Box<LuaClosure> {}
-unsafe impl Trace for Box<LuaClosure> {
-    unsafe fn trace(&self) {
-        (**self).trace();
-    }
-
-    unsafe fn root(&self) {
-        (**self).root();
-    }
-
-    unsafe fn unroot(&self) {
-        (**self).unroot();
-    }
-
-    fn finalize_glue(&self) {
-        (**self).finalize();
-        (**self).finalize_glue();
-    }
-}
 
 /// Represents a closure in Lua.
 #[derive(Trace, Finalize)]
@@ -51,33 +36,39 @@ impl UserFunction {
     }
 }
 
-impl LuaClosure for UserFunction {
-    fn index(&self) -> usize {
-        self.index
+impl GcVal for UserFunction {
+    fn is_closure(&self) -> bool {
+        true
     }
 
-    fn reg_count(&self) -> usize {
-        self.reg_count
+    fn index(&self) -> Result<usize, LuaError> {
+        Ok(self.index)
     }
 
-    fn param_count(&self) -> usize {
-        self.param_count
+    fn reg_count(&self) -> Result<usize, LuaError> {
+        Ok(self.reg_count)
+    }
+
+    fn param_count(&self) -> Result<usize, LuaError> {
+        Ok(self.param_count)
     }
 
     fn call(&self, vm: &mut Vm) -> Result<(), LuaError> {
         vm.eval()
     }
 
-    fn ret_vals(&self) -> usize {
-        self.ret_vals.get()
+    fn ret_vals(&self) -> Result<usize, LuaError> {
+        Ok(self.ret_vals.get())
     }
 
-    fn set_ret_vals(&self, vals: usize) {
+    fn set_ret_vals(&self, vals: usize) -> Result<(), LuaError> {
         self.ret_vals.set(vals);
+        Ok(())
     }
 
-    fn inc_ret_vals(&self, amount: usize) {
+    fn inc_ret_vals(&self, amount: usize) -> Result<(), LuaError> {
         self.ret_vals.set(self.ret_vals.get() + amount);
+        Ok(())
     }
 
     fn get_upval(&self, i: usize) -> Result<LuaVal, LuaError> {
@@ -105,33 +96,39 @@ pub struct BuiltinFunction {
     ret_vals: Cell<usize>,
 }
 
-impl LuaClosure for BuiltinFunction {
-    fn index(&self) -> usize {
-        0
+impl GcVal for BuiltinFunction {
+    fn is_closure(&self) -> bool {
+        true
     }
 
-    fn reg_count(&self) -> usize {
-        0
+    fn index(&self) -> Result<usize, LuaError> {
+        Ok(0)
     }
 
-    fn param_count(&self) -> usize {
-        0
+    fn reg_count(&self) -> Result<usize, LuaError> {
+        Ok(0)
+    }
+
+    fn param_count(&self) -> Result<usize, LuaError> {
+        Ok(0)
     }
 
     fn call(&self, vm: &mut Vm) -> Result<(), LuaError> {
         (self.handler)(vm)
     }
 
-    fn ret_vals(&self) -> usize {
-        self.ret_vals.get()
+    fn ret_vals(&self) -> Result<usize, LuaError> {
+        Ok(self.ret_vals.get())
     }
 
-    fn set_ret_vals(&self, vals: usize) {
+    fn set_ret_vals(&self, vals: usize) -> Result<(), LuaError> {
         self.ret_vals.set(vals);
+        Ok(())
     }
 
-    fn inc_ret_vals(&self, amount: usize) {
+    fn inc_ret_vals(&self, amount: usize) -> Result<(), LuaError> {
         self.ret_vals.set(self.ret_vals.get() + amount);
+        Ok(())
     }
 
     fn get_upval(&self, _: usize) -> Result<LuaVal, LuaError> {
@@ -147,35 +144,23 @@ impl LuaClosure for BuiltinFunction {
     }
 }
 
-pub fn from_stdfunction(func: &StdFunction) -> Gc<Box<LuaClosure>> {
-    Gc::new(Box::new(BuiltinFunction {
+pub fn from_stdfunction(func: &StdFunction) -> Box<dyn GcVal> {
+    Box::new(BuiltinFunction {
         handler: func.handler(),
         ret_vals: Cell::new(0),
-    }))
+    })
 }
 
-pub fn from_function(func: &Function) -> Gc<Box<LuaClosure>> {
+pub fn from_function(func: &Function) -> Box<dyn GcVal> {
     let mut upvals = Vec::with_capacity(func.upvals_count());
     for _ in 0..func.upvals_count() {
         upvals.push(LuaVal::new());
     }
-    Gc::new(Box::new(UserFunction {
+    Box::new(UserFunction {
         index: func.index(),
         reg_count: func.reg_count(),
         param_count: func.param_count(),
         ret_vals: Cell::new(0),
         upvals: GcCell::new(upvals),
-    }))
-}
-
-pub trait LuaClosure: Trace + Finalize {
-    fn index(&self) -> usize;
-    fn reg_count(&self) -> usize;
-    fn param_count(&self) -> usize;
-    fn call(&self, vm: &mut Vm) -> Result<(), LuaError>;
-    fn ret_vals(&self) -> usize;
-    fn set_ret_vals(&self, vals: usize);
-    fn inc_ret_vals(&self, amount: usize);
-    fn get_upval(&self, i: usize) -> Result<LuaVal, LuaError>;
-    fn set_upval(&self, i: usize, value: LuaVal) -> Result<(), LuaError>;
+    })
 }

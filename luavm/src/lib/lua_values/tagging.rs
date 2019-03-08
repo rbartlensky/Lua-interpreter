@@ -1,6 +1,5 @@
-use super::lua_closure::LuaClosure;
-use super::lua_table::LuaTable;
-use gc::Gc;
+use gc::gc::GcBox;
+use lua_values::gc_val::GcVal;
 use std::{mem::size_of, ops::BitXor};
 
 /// Used for extracting the tag out of an address.
@@ -9,15 +8,15 @@ pub const MASK: usize = size_of::<usize>() - 1;
 pub const TAG_SHIFT: usize = 3;
 
 /// Represents the type of a lua value.
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum LuaValKind {
     BOXED = 0,
     INT = 1,
     FLOAT = 2,
-    TABLE = 3,
-    NIL = 4,
-    CLOSURE = 5,
-    BOOL = 6,
+    Gc = 3,
+    GcRoot = 4,
+    BOOL = 5,
+    NIL = 6,
 }
 
 impl From<usize> for LuaValKind {
@@ -30,9 +29,9 @@ impl From<usize> for LuaValKind {
                 0 => LuaValKind::BOXED,
                 1 => LuaValKind::INT,
                 2 => LuaValKind::FLOAT,
-                3 => LuaValKind::TABLE,
-                5 => LuaValKind::CLOSURE,
-                6 => LuaValKind::BOOL,
+                3 => LuaValKind::Gc,
+                4 => LuaValKind::GcRoot,
+                5 => LuaValKind::BOOL,
                 _ => unreachable!(),
             }
         }
@@ -46,17 +45,19 @@ impl BitXor<usize> for LuaValKind {
     }
 }
 
-/// Creates a raw pointer from the given value, and returns its address.
-pub fn to_raw_ptr<T>(val: T) -> usize {
-    Box::into_raw(Box::new(val)) as usize
+#[inline(always)]
+pub fn set_tag(ptr: usize, tag: LuaValKind) -> usize {
+    let old_tag = ptr & MASK;
+    tag.clone() ^ (ptr ^ old_tag)
+}
+
+#[inline(always)]
+pub fn untag(ptr: usize) -> usize {
+    ptr ^ (ptr & MASK)
 }
 
 /// Untags the given pointer, and returns a mutable pointer to Gc<LuaTable>.
-pub fn table_ptr(encoded_ptr: usize) -> *mut Gc<Box<LuaTable>> {
-    (encoded_ptr ^ LuaValKind::TABLE as usize) as *mut Gc<Box<LuaTable>>
-}
-
-/// Untags the given pointer, and returns a mutable pointer to Gc<LuaClosure>.
-pub fn closure_ptr(encoded_ptr: usize) -> *mut Gc<Box<LuaClosure>> {
-    (encoded_ptr ^ LuaValKind::CLOSURE as usize) as *mut Gc<Box<LuaClosure>>
+#[inline(always)]
+pub fn gc_ptr(encoded_ptr: usize) -> *mut GcBox<Box<dyn GcVal>> {
+    untag(encoded_ptr) as *mut GcBox<Box<dyn GcVal>>
 }

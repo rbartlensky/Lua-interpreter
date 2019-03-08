@@ -34,7 +34,7 @@ pub fn lua_format(vm: &mut Vm) -> Result<(), LuaError> {
             fmt_string = fmt_string.replacen("%d", arg.to_string()?.as_ref(), 1);
         }
         vm.push(LuaVal::from(fmt_string));
-        vm.closure().set_ret_vals(1);
+        vm.closure().set_ret_vals(1)?;
         Ok(())
     }
 }

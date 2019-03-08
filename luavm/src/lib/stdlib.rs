@@ -58,7 +58,7 @@ pub fn lua_assert(vm: &mut Vm) -> Result<(), LuaError> {
             swap(&mut nil, &mut vm.stack[i]);
             vm.stack.push(nil);
         }
-        vm.closure().set_ret_vals(args_count);
+        vm.closure().set_ret_vals(args_count)?;
         Ok(())
     } else {
         let message = if args_count > 1 {
@@ -82,7 +82,7 @@ pub fn lua_tonumber(vm: &mut Vm) -> Result<(), LuaError> {
         swap(&mut val, &mut vm.stack[args_start]);
         if val.is_number() {
             vm.stack.push(val);
-            vm.closure().set_ret_vals(1);
+            vm.closure().set_ret_vals(1)?;
             Ok(())
         } else {
             if let Ok(num) = val.to_int() {
@@ -92,7 +92,7 @@ pub fn lua_tonumber(vm: &mut Vm) -> Result<(), LuaError> {
             } else {
                 vm.stack.push(LuaVal::new());
             }
-            vm.closure().set_ret_vals(1);
+            vm.closure().set_ret_vals(1)?;
             Ok(())
         }
     } else {

@@ -1,20 +1,18 @@
+pub mod gc_val;
 pub mod lua_closure;
 mod lua_obj;
 pub mod lua_table;
 mod tagging;
 
-use self::{
-    lua_closure::*,
-    lua_obj::*,
-    lua_table::{CachingTable, UserTable},
-    tagging::*,
-};
+use self::gc_val::GcVal;
+use self::{lua_closure::*, lua_obj::*, tagging::*};
 use crate::stdlib::StdFunction;
 use errors::LuaError;
-use gc::{Finalize, Gc, Trace};
+use gc::finalizer_safe;
+use gc::{gc::GcBox, Finalize, Trace};
 use ieee754::Ieee754;
-use lua_values::lua_table::LuaTable;
 use luacompiler::bytecode::Function;
+use std::cell::Cell;
 use std::{
     cmp::Ordering,
     fmt,
@@ -22,68 +20,68 @@ use std::{
     hash::{Hash, Hasher},
     mem::transmute,
 };
+use Vm;
 
 /// Represents a value in Lua.
 #[derive(Debug)]
 pub struct LuaVal {
-    val: usize,
+    val: Cell<usize>,
 }
 
 impl Finalize for LuaVal {}
 unsafe impl Trace for LuaVal {
+    #[inline]
     unsafe fn trace(&self) {
         match self.kind() {
-            LuaValKind::TABLE => (*table_ptr(self.val)).trace(),
-            LuaValKind::CLOSURE => (*closure_ptr(self.val)).trace(),
+            LuaValKind::Gc | LuaValKind::GcRoot => self.inner().trace_inner(),
             _ => {}
         }
     }
 
+    #[inline]
     unsafe fn root(&self) {
         match self.kind() {
-            LuaValKind::TABLE => (*table_ptr(self.val)).root(),
-            LuaValKind::CLOSURE => (*closure_ptr(self.val)).root(),
+            LuaValKind::Gc | LuaValKind::GcRoot => {
+                assert!(!self.rooted(), "Can't double-root a Gc<T>");
+                self.inner().root_inner();
+                self.set_root();
+            }
             _ => {}
         }
     }
 
+    #[inline]
     unsafe fn unroot(&self) {
         match self.kind() {
-            LuaValKind::TABLE => (*table_ptr(self.val)).unroot(),
-            LuaValKind::CLOSURE => (*closure_ptr(self.val)).unroot(),
+            LuaValKind::Gc | LuaValKind::GcRoot => {
+                assert!(self.rooted(), "Can't double-unroot a Gc<T>");
+                self.inner().unroot_inner();
+                self.clear_root();
+            }
             _ => {}
         }
     }
 
+    #[inline]
     fn finalize_glue(&self) {
-        match self.kind() {
-            LuaValKind::TABLE => unsafe {
-                (*table_ptr(self.val)).finalize();
-                (*table_ptr(self.val)).finalize_glue();
-            },
-            LuaValKind::CLOSURE => unsafe {
-                (*closure_ptr(self.val)).finalize();
-                (*closure_ptr(self.val)).finalize_glue();
-            },
-            _ => {}
-        }
+        Finalize::finalize(self);
     }
 }
 
 impl LuaVal {
     /// Create an empty LuaVal which is equivalent to Nil.
     pub fn new() -> LuaVal {
-        LuaVal { val: 0 }
+        LuaVal { val: Cell::new(0) }
     }
 
     /// Returns the type of the value store in the pointer.
     fn kind(&self) -> LuaValKind {
-        LuaValKind::from(self.val)
+        LuaValKind::from(self.val.get())
     }
 
     /// Interprets the value as a pointer to a LuaObj, and returns a pointer to it.
     fn as_boxed(&self) -> *mut Box<LuaObj> {
-        (LuaValKind::BOXED ^ self.val) as *mut Box<LuaObj>
+        (LuaValKind::BOXED ^ self.val.get()) as *mut Box<LuaObj>
     }
 
     pub fn is_int(&self) -> bool {
@@ -143,8 +141,10 @@ impl LuaVal {
                 // https://www.lua.org/manual/5.3/manual.html#3.4.3
                 // The behaviour of `as f64` is the same as the conversion
                 // from int to float described in the manual.
-                LuaValKind::INT => Ok(((self.val >> tagging::TAG_SHIFT) as i64) as f64),
-                LuaValKind::FLOAT => Ok(transmute::<usize, f64>(LuaValKind::FLOAT ^ self.val)),
+                LuaValKind::INT => Ok(((self.val.get() >> tagging::TAG_SHIFT) as i64) as f64),
+                LuaValKind::FLOAT => {
+                    Ok(transmute::<usize, f64>(LuaValKind::FLOAT ^ self.val.get()))
+                }
                 LuaValKind::BOXED => (*self.as_boxed()).to_float(),
                 _ => Err(LuaError::FloatConversionErr),
             }
@@ -155,7 +155,7 @@ impl LuaVal {
     pub fn to_int(&self) -> Result<i64, LuaError> {
         unsafe {
             match self.kind() {
-                LuaValKind::INT => Ok((self.val >> tagging::TAG_SHIFT) as i64),
+                LuaValKind::INT => Ok((self.val.get() >> tagging::TAG_SHIFT) as i64),
                 LuaValKind::BOXED => (*self.as_boxed()).to_int(),
                 _ => Err(LuaError::IntConversionErr),
             }
@@ -165,10 +165,13 @@ impl LuaVal {
     /// Attempts to convert this value to a string.
     pub fn to_string(&self) -> Result<String, LuaError> {
         match self.kind() {
-            LuaValKind::BOOL => Ok(((self.val >> tagging::TAG_SHIFT) != 0).to_string()),
-            LuaValKind::INT => Ok(((self.val >> tagging::TAG_SHIFT) as i64).to_string()),
+            LuaValKind::BOOL => Ok(((self.val.get() >> tagging::TAG_SHIFT) != 0).to_string()),
+            LuaValKind::INT => Ok(((self.val.get() >> tagging::TAG_SHIFT) as i64).to_string()),
             LuaValKind::FLOAT => {
-                Ok((unsafe { transmute::<usize, f64>(LuaValKind::FLOAT ^ self.val) }).to_string())
+                Ok(
+                    (unsafe { transmute::<usize, f64>(LuaValKind::FLOAT ^ self.val.get()) })
+                        .to_string(),
+                )
             }
             LuaValKind::BOXED => unsafe { (*self.as_boxed()).to_string() },
             _ => Err(LuaError::StringConversionErr),
@@ -178,7 +181,7 @@ impl LuaVal {
     pub fn to_bool(&self) -> bool {
         match self.kind() {
             LuaValKind::NIL => false,
-            LuaValKind::BOOL => (self.val >> tagging::TAG_SHIFT) != 0,
+            LuaValKind::BOOL => (self.val.get() >> tagging::TAG_SHIFT) != 0,
             _ => true,
         }
     }
@@ -192,10 +195,8 @@ impl LuaVal {
 
     /// Sets the given attribute to a given value.
     pub fn set_attr(&self, attr: LuaVal, val: LuaVal) -> Result<(), LuaError> {
-        if let LuaValKind::TABLE = self.kind() {
-            Ok(unsafe {
-                (*table_ptr(self.val)).set_attr(attr, val);
-            })
+        if let LuaValKind::Gc | LuaValKind::GcRoot = self.kind() {
+            unsafe { (*gc_ptr(self.val.get())).value().set_attr(attr, val) }
         } else {
             Err(LuaError::SetAttrErr)
         }
@@ -203,8 +204,8 @@ impl LuaVal {
 
     /// Gets the value of the given attribute.
     pub fn get_attr(&self, attr: &LuaVal) -> Result<LuaVal, LuaError> {
-        if let LuaValKind::TABLE = self.kind() {
-            Ok(unsafe { (*table_ptr(self.val)).get_attr(attr) })
+        if let LuaValKind::Gc | LuaValKind::GcRoot = self.kind() {
+            unsafe { (*gc_ptr(self.val.get())).value().get_attr(attr) }
         } else {
             Err(LuaError::GetAttrErr)
         }
@@ -262,13 +263,6 @@ impl LuaVal {
         Ok(LuaVal::from(self.to_float()?.powf(other.to_float()?)))
     }
 
-    pub fn get_closure(&self) -> Result<Gc<Box<LuaClosure>>, LuaError> {
-        if let LuaValKind::CLOSURE = self.kind() {
-            return Ok(unsafe { (*closure_ptr(self.val)).clone() });
-        }
-        Err(LuaError::NotAClosure)
-    }
-
     pub fn negate_number(&self) -> Result<LuaVal, LuaError> {
         if self.is_int() {
             Ok(LuaVal::from(-self.to_int()?))
@@ -277,6 +271,100 @@ impl LuaVal {
         } else {
             Err(LuaError::Error("Cannot negate non-numbers!".to_string()))
         }
+    }
+
+    pub fn index(&self) -> Result<usize, LuaError> {
+        if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+            unsafe { (*gc_ptr(self.val.get())).value().index() }
+        } else {
+            Err(LuaError::NotAClosure)
+        }
+    }
+
+    pub fn reg_count(&self) -> Result<usize, LuaError> {
+        if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+            unsafe { (*gc_ptr(self.val.get())).value().reg_count() }
+        } else {
+            Err(LuaError::NotAClosure)
+        }
+    }
+
+    pub fn param_count(&self) -> Result<usize, LuaError> {
+        if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+            unsafe { (*gc_ptr(self.val.get())).value().param_count() }
+        } else {
+            Err(LuaError::NotAClosure)
+        }
+    }
+
+    pub fn call(&self, vm: &mut Vm) -> Result<(), LuaError> {
+        if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+            unsafe { (*gc_ptr(self.val.get())).value().call(vm) }
+        } else {
+            Err(LuaError::NotAClosure)
+        }
+    }
+
+    pub fn ret_vals(&self) -> Result<usize, LuaError> {
+        if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+            unsafe { (*gc_ptr(self.val.get())).value().ret_vals() }
+        } else {
+            Err(LuaError::NotAClosure)
+        }
+    }
+
+    pub fn set_ret_vals(&self, vals: usize) -> Result<(), LuaError> {
+        if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+            unsafe { (*gc_ptr(self.val.get())).value().set_ret_vals(vals) }
+        } else {
+            Err(LuaError::NotAClosure)
+        }
+    }
+
+    pub fn inc_ret_vals(&self, amount: usize) -> Result<(), LuaError> {
+        if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+            unsafe { (*gc_ptr(self.val.get())).value().inc_ret_vals(amount) }
+        } else {
+            Err(LuaError::NotAClosure)
+        }
+    }
+
+    pub fn get_upval(&self, i: usize) -> Result<LuaVal, LuaError> {
+        if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+            unsafe { (*gc_ptr(self.val.get())).value().get_upval(i) }
+        } else {
+            Err(LuaError::NotAClosure)
+        }
+    }
+
+    pub fn set_upval(&self, i: usize, value: LuaVal) -> Result<(), LuaError> {
+        if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+            unsafe { (*gc_ptr(self.val.get())).value().set_upval(i, value) }
+        } else {
+            Err(LuaError::NotAClosure)
+        }
+    }
+
+    // FOR GC ONLY!
+    #[inline]
+    fn rooted(&self) -> bool {
+        LuaValKind::GcRoot == self.kind()
+    }
+
+    #[inline]
+    unsafe fn set_root(&self) {
+        self.val.set(set_tag(self.val.get(), LuaValKind::GcRoot))
+    }
+
+    #[inline]
+    unsafe fn clear_root(&self) {
+        self.val.set(set_tag(self.val.get(), LuaValKind::Gc))
+    }
+
+    #[inline]
+    fn inner(&self) -> &GcBox<Box<dyn GcVal>> {
+        assert!(finalizer_safe());
+        unsafe { &*gc_ptr(self.val.get()) }
     }
 }
 
@@ -289,10 +377,8 @@ impl PartialEq for LuaVal {
         } else if self.kind() == other.kind() {
             if self.kind() == LuaValKind::NIL {
                 return true;
-            } else if self.kind() == LuaValKind::TABLE {
-                return unsafe { (*table_ptr(self.val)).same_ptr(&*table_ptr(other.val)) };
-            } else if self.kind() == LuaValKind::CLOSURE {
-                return unsafe { (*closure_ptr(self.val)).same_ptr(&*closure_ptr(other.val)) };
+            } else if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+                return gc_ptr(self.val.get()) == gc_ptr(other.val.get());
             } else if self.kind() == LuaValKind::BOOL {
                 return self.val == other.val;
             }
@@ -321,7 +407,7 @@ impl Hash for LuaVal {
                     val.to_int().unwrap().hash(state)
                 }
             }
-            _ => self.val.hash(state),
+            _ => self.val.get().hash(state),
         }
     }
 }
@@ -336,7 +422,9 @@ impl From<i64> for LuaVal {
         } else {
             LuaValKind::INT ^ (uint << tagging::TAG_SHIFT)
         };
-        LuaVal { val }
+        LuaVal {
+            val: Cell::new(val),
+        }
     }
 }
 
@@ -352,7 +440,9 @@ impl From<f64> for LuaVal {
         } else {
             LuaValKind::FLOAT ^ uint
         };
-        LuaVal { val }
+        LuaVal {
+            val: Cell::new(val),
+        }
     }
 }
 
@@ -360,11 +450,13 @@ impl From<String> for LuaVal {
     /// Create a float LuaVal.
     fn from(string: String) -> Self {
         LuaVal {
-            val: LuaValKind::BOXED
-                ^ to_boxed(Box::new(LuaString {
-                    v: string,
-                    const_index: None,
-                })),
+            val: Cell::new(
+                LuaValKind::BOXED
+                    ^ to_boxed(Box::new(LuaString {
+                        v: string,
+                        const_index: None,
+                    })),
+            ),
         }
     }
 }
@@ -373,39 +465,43 @@ impl From<(String, usize)> for LuaVal {
     /// Create a float LuaVal.
     fn from(string: (String, usize)) -> Self {
         LuaVal {
-            val: LuaValKind::BOXED
-                ^ to_boxed(Box::new(LuaString {
-                    v: string.0,
-                    const_index: Some(string.1),
-                })),
+            val: Cell::new(
+                LuaValKind::BOXED
+                    ^ to_boxed(Box::new(LuaString {
+                        v: string.0,
+                        const_index: Some(string.1),
+                    })),
+            ),
         }
     }
 }
 
 impl From<&StdFunction> for LuaVal {
-    /// Create a closure LuaVal
+    /// Create a gc-able closure LuaVal
     fn from(func: &StdFunction) -> Self {
-        LuaVal {
-            val: LuaValKind::CLOSURE ^ to_raw_ptr(from_stdfunction(func)),
+        let lua_closure = from_stdfunction(func);
+        unsafe {
+            let ptr = GcBox::new(lua_closure);
+            (*ptr.as_ptr()).value().unroot();
+            let val = LuaVal {
+                val: Cell::new(LuaValKind::GcRoot ^ ptr.as_ptr() as usize),
+            };
+            val
         }
     }
 }
 
 impl From<&Function> for LuaVal {
-    /// Create a closure LuaVal
+    /// Create a gc-able closure LuaVal
     fn from(func: &Function) -> Self {
-        LuaVal {
-            val: LuaValKind::CLOSURE ^ to_raw_ptr(from_function(func)),
-        }
-    }
-}
-
-impl From<UserFunction> for LuaVal {
-    /// Create a closure LuaVal
-    fn from(func: UserFunction) -> Self {
-        let user_func: Box<LuaClosure> = Box::new(func);
-        LuaVal {
-            val: LuaValKind::CLOSURE ^ to_raw_ptr(Gc::new(user_func)),
+        let lua_closure = from_function(func);
+        unsafe {
+            let ptr = GcBox::new(lua_closure);
+            (*ptr.as_ptr()).value().unroot();
+            let val = LuaVal {
+                val: Cell::new(LuaValKind::GcRoot ^ ptr.as_ptr() as usize),
+            };
+            val
         }
     }
 }
@@ -414,27 +510,22 @@ impl From<bool> for LuaVal {
     /// Create an integer LuaVal.
     fn from(b: bool) -> Self {
         LuaVal {
-            val: LuaValKind::BOOL ^ ((b as usize) << tagging::TAG_SHIFT),
+            val: Cell::new(LuaValKind::BOOL ^ ((b as usize) << tagging::TAG_SHIFT)),
         }
     }
 }
 
-impl From<UserTable> for LuaVal {
-    /// Create a table LuaVal.
-    fn from(table: UserTable) -> Self {
-        let lua_table: Box<LuaTable> = Box::new(table);
-        LuaVal {
-            val: LuaValKind::TABLE ^ to_raw_ptr(Gc::new(lua_table)),
-        }
-    }
-}
-
-impl From<CachingTable> for LuaVal {
-    /// Create a table LuaVal.
-    fn from(table: CachingTable) -> Self {
-        let lua_table: Box<LuaTable> = Box::new(table);
-        LuaVal {
-            val: LuaValKind::TABLE ^ to_raw_ptr(Gc::new(lua_table)),
+impl<T: GcVal + 'static> From<T> for LuaVal {
+    /// Create a gc-able LuaVal.
+    fn from(table: T) -> Self {
+        let lua_table: Box<dyn GcVal> = Box::new(table);
+        unsafe {
+            let ptr = GcBox::new(lua_table);
+            (*ptr.as_ptr()).value().unroot();
+            let val = LuaVal {
+                val: Cell::new(LuaValKind::GcRoot ^ ptr.as_ptr() as usize),
+            };
+            val
         }
     }
 }
@@ -445,11 +536,8 @@ impl Drop for LuaVal {
             LuaValKind::BOXED => unsafe {
                 Box::from_raw(self.as_boxed());
             },
-            LuaValKind::TABLE => unsafe {
-                Box::from_raw(table_ptr(self.val));
-            },
-            LuaValKind::CLOSURE => unsafe {
-                Box::from_raw(closure_ptr(self.val));
+            LuaValKind::GcRoot => unsafe {
+                self.inner().unroot_inner();
             },
             // NIL is a nullptr, so there is no need to free, and raw ints and floats
             // are not heap allocated.
@@ -460,19 +548,24 @@ impl Drop for LuaVal {
 
 impl Clone for LuaVal {
     fn clone(&self) -> LuaVal {
-        let val = match self.kind() {
-            LuaValKind::BOXED => unsafe {
-                LuaValKind::BOXED ^ to_boxed((*self.as_boxed()).clone_box())
+        match self.kind() {
+            LuaValKind::BOXED => LuaVal {
+                val: Cell::new(unsafe {
+                    LuaValKind::BOXED ^ to_boxed((*self.as_boxed()).clone_box())
+                }),
             },
-            LuaValKind::TABLE => unsafe {
-                LuaValKind::TABLE ^ to_raw_ptr((*table_ptr(self.val)).clone())
+            LuaValKind::Gc | LuaValKind::GcRoot => unsafe {
+                self.inner().root_inner();
+                let val = LuaVal {
+                    val: Cell::new(self.val.get()),
+                };
+                val.set_root();
+                val
             },
-            LuaValKind::CLOSURE => unsafe {
-                LuaValKind::CLOSURE ^ to_raw_ptr((*closure_ptr(self.val)).clone())
+            _ => LuaVal {
+                val: Cell::new(self.val.get()),
             },
-            _ => self.val,
-        };
-        LuaVal { val }
+        }
     }
 }
 
@@ -480,12 +573,13 @@ impl Display for LuaVal {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self.kind() {
             LuaValKind::NIL => write!(f, "nil"),
-            LuaValKind::TABLE => write!(f, "lua_table at {:x}", unsafe {
-                (*table_ptr(self.val)).addr()
-            }),
-            LuaValKind::CLOSURE => write!(f, "lua_closure at {:x}", unsafe {
-                (*closure_ptr(self.val)).addr()
-            }),
+            LuaValKind::Gc | LuaValKind::GcRoot => {
+                if unsafe { (*gc_ptr(self.val.get())).value() }.is_table() {
+                    write!(f, "lua_table at {:x}", gc_ptr(self.val.get()) as usize)
+                } else {
+                    write!(f, "lua_closure at {:x}", gc_ptr(self.val.get()) as usize)
+                }
+            }
             _ => write!(f, "{}", self.to_string().unwrap()),
         }
     }
@@ -513,6 +607,7 @@ impl PartialOrd for LuaVal {
 
 #[cfg(test)]
 mod tests {
+    use super::lua_table::*;
     use super::*;
     use std::{collections::HashMap, vec::Vec};
 
@@ -615,12 +710,11 @@ mod tests {
         let mut hm = HashMap::new();
         hm.insert(LuaVal::from(String::from("bar")), LuaVal::from(2));
         let main = LuaVal::from(UserTable::new(hm));
-        assert_eq!(main.kind(), LuaValKind::TABLE);
+        assert!(main.kind() == LuaValKind::Gc || main.kind() == LuaValKind::GcRoot);
         assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
         assert_eq!(main.to_float().unwrap_err(), LuaError::FloatConversionErr);
         let main_clone = main.clone();
-        assert_ne!(main_clone.val, main.val);
         assert_eq!(main_clone.kind(), main.kind());
         assert_eq!(
             main.get_attr(&LuaVal::from(String::from("foo")))
@@ -641,14 +735,11 @@ mod tests {
     #[test]
     fn closure_type() {
         let mut main = LuaVal::from(UserFunction::new(0, 0, 0, vec![]));
-        assert_eq!(main.kind(), LuaValKind::CLOSURE);
+        assert!(main.kind() == LuaValKind::Gc || main.kind() == LuaValKind::GcRoot);
         assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
         assert_eq!(main.to_float().unwrap_err(), LuaError::FloatConversionErr);
         test_get_and_set_attr_errors(&mut main);
-        let main_clone = main.clone();
-        assert_ne!(main_clone.val, main.val);
-        assert_eq!(main_clone.kind(), main.kind());
     }
 
     #[test]

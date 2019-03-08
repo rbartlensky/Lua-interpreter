@@ -14,14 +14,13 @@ mod lua_values;
 mod stdlib;
 
 use errors::LuaError;
-use gc::Gc;
 use instructions::{
     arithmetic_operators::*, control::*, functions::*, loads::*, relational_operators::*,
     tables::*, upvals::*,
 };
 use lua_std::{io::get_io_module, string::get_string_module};
 use lua_values::{
-    lua_closure::{LuaClosure, UserFunction},
+    lua_closure::UserFunction,
     lua_table::{CachingTable, UserTable},
     LuaVal,
 };
@@ -73,7 +72,7 @@ const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
 ];
 
 pub struct StackFrame {
-    pub closure: Gc<Box<LuaClosure>>,
+    pub closure: LuaVal,
     pub top: usize,
 }
 
@@ -116,13 +115,8 @@ impl Vm {
         let closure = {
             let index = bytecode.get_main_function();
             let main = bytecode.get_function(index);
-            let boxed: Box<LuaClosure> = Box::new(UserFunction::new(
-                index,
-                0,
-                main.param_count(),
-                vec![env.clone()],
-            ));
-            Gc::new(boxed)
+            let func = UserFunction::new(index, 0, main.param_count(), vec![env.clone()]);
+            LuaVal::from(func)
         };
         let mut stack_frames = Vec::with_capacity(255);
         stack_frames.push(StackFrame { closure, top: 0 });
@@ -176,14 +170,14 @@ impl Vm {
         .unwrap();
     }
 
-    pub fn closure(&self) -> &Gc<Box<LuaClosure>> {
+    pub fn closure(&self) -> &LuaVal {
         &self.stack_frames[self.curr_frame].closure
     }
 
     /// Evaluate the program.
     pub fn eval(&mut self) -> Result<(), LuaError> {
         self.pc = 0;
-        let index = self.closure().index();
+        let index = self.closure().index()?;
         let len = self.bytecode.get_function(index).instrs_len();
         while self.pc < len {
             let instr = self.bytecode.get_function(index).get_instr(self.pc);

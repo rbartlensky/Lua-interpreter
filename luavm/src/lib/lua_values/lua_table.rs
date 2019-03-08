@@ -1,31 +1,8 @@
-use gc::{Finalize, GcCell, Trace};
+use errors::LuaError;
+use gc::GcCell;
+use lua_values::gc_val::GcVal;
 use std::collections::HashMap;
 use LuaVal;
-
-impl Finalize for Box<LuaTable> {}
-unsafe impl Trace for Box<LuaTable> {
-    unsafe fn trace(&self) {
-        (**self).trace();
-    }
-
-    unsafe fn root(&self) {
-        (**self).root();
-    }
-
-    unsafe fn unroot(&self) {
-        (**self).unroot();
-    }
-
-    fn finalize_glue(&self) {
-        (**self).finalize();
-        (**self).finalize_glue();
-    }
-}
-
-pub trait LuaTable: Trace + Finalize {
-    fn get_attr(&self, attr: &LuaVal) -> LuaVal;
-    fn set_attr(&self, attr: LuaVal, val: LuaVal);
-}
 
 /// Represents a table in Lua.
 #[derive(Trace, Finalize)]
@@ -40,16 +17,21 @@ impl UserTable {
     }
 }
 
-impl LuaTable for UserTable {
-    fn set_attr(&self, attr: LuaVal, val: LuaVal) {
-        self.v.borrow_mut().insert(attr, val);
+impl GcVal for UserTable {
+    fn is_table(&self) -> bool {
+        true
     }
 
-    fn get_attr(&self, attr: &LuaVal) -> LuaVal {
-        match self.v.borrow().get(attr) {
+    fn set_attr(&self, attr: LuaVal, val: LuaVal) -> Result<(), LuaError> {
+        self.v.borrow_mut().insert(attr, val);
+        Ok(())
+    }
+
+    fn get_attr(&self, attr: &LuaVal) -> Result<LuaVal, LuaError> {
+        Ok(match self.v.borrow().get(attr) {
             Some(val) => val.clone(),
             None => LuaVal::new(),
-        }
+        })
     }
 }
 
@@ -70,8 +52,12 @@ impl CachingTable {
     }
 }
 
-impl LuaTable for CachingTable {
-    fn set_attr(&self, attr: LuaVal, val: LuaVal) {
+impl GcVal for CachingTable {
+    fn is_table(&self) -> bool {
+        true
+    }
+
+    fn set_attr(&self, attr: LuaVal, val: LuaVal) -> Result<(), LuaError> {
         match attr.get_constant_index() {
             Some(i) => {
                 self.str_attrs.borrow_mut()[i] = val;
@@ -80,15 +66,16 @@ impl LuaTable for CachingTable {
                 self.attrs.borrow_mut().insert(attr, val);
             }
         }
+        Ok(())
     }
 
-    fn get_attr(&self, attr: &LuaVal) -> LuaVal {
-        match attr.get_constant_index() {
+    fn get_attr(&self, attr: &LuaVal) -> Result<LuaVal, LuaError> {
+        Ok(match attr.get_constant_index() {
             Some(i) => self.str_attrs.borrow()[i].clone(),
             None => match self.attrs.borrow().get(attr) {
                 Some(val) => val.clone(),
                 None => LuaVal::new(),
             },
-        }
+        })
     }
 }

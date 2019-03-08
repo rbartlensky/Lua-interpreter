@@ -8,7 +8,7 @@ name = "luavm"
 path = "src/lib/mod.rs"
 
 [dependencies]
-gc = { git="https://github.com/rbartlensky/rust-gc", branch="ref-eq" }
+gc = { git="https://github.com/rbartlensky/rust-gc", branch="pub-gcbox" }
 gc_derive = "0.3"
 luacompiler = { path="../luacompiler" }
 assert_float_eq = "1.1.3"
