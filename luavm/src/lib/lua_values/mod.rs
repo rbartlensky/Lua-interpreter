@@ -417,7 +417,7 @@ impl From<i64> for LuaVal {
     fn from(int: i64) -> Self {
         let uint = int as usize;
         // if any of the 3 high-order bits are set, then the int is boxed
-        let val = if uint & !tagging::MASK != 0 {
+        let val = if uint & (tagging::MASK.rotate_right(tagging::TAG_SHIFT as u32)) != 0 {
             LuaValKind::BOXED ^ to_boxed(Box::new(LuaInt { v: int }))
         } else {
             LuaValKind::INT ^ (uint << tagging::TAG_SHIFT)
