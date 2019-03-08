@@ -466,8 +466,14 @@ impl<'a> LuaToIR<'a> {
         for (name, expr) in names.iter().zip(exprs.iter()) {
             let var = self.compile_var_or_name(name);
             let res = self.compile_assignment(var, expr, AssignmentType::Postponed);
-            if let ResultType::Global(reg) = res {
-                postponed_instrs.push((var, reg));
+            match res {
+                ResultType::Global(reg) => {
+                    postponed_instrs.push((var, reg));
+                }
+                ResultType::Dict(reg) => {
+                    postponed_instrs.push((var, reg));
+                }
+                _ => {}
             }
         }
         // for all the remaining names (z, w), create a new empty register, and update
@@ -2375,6 +2381,7 @@ mod tests {
             Instr::ThreeArg(GetAttr, Reg(8), Reg(6), Reg(7)),
             Instr::TwoArg(MOV, Reg(9), Str("d".to_string())),
             Instr::TwoArg(MOV, Reg(10), Nil),
+            Instr::ThreeArg(SetAttr, Reg(2), Reg(3), Reg(4)),
             Instr::ThreeArg(SetUpAttr, Some(0), Str("b".to_string()), Reg(5)),
             Instr::ThreeArg(SetAttr, Reg(8), Reg(9), Reg(10)),
         ]];
