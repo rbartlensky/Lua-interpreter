@@ -745,6 +745,13 @@ impl<'a> LuaToIR<'a> {
             Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
+            } if ridx == lua5_3_y::R_FUNCTIONDEF => {
+                // nodes = [<FUNCTION>, <functionbody>]
+                self.compile_funcbody(get_nodes(&nodes[1], lua5_3_y::R_FUNCBODY))
+            }
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
             } if ridx == lua5_3_y::R_EXP => {
                 if nodes.len() > 1 {
                     self.compile_or_short_circuit(nodes)
