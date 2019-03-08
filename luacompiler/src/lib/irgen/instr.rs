@@ -10,6 +10,7 @@ pub enum Arg {
     Reg(usize),
     Func(usize),
     Some(usize),
+    Bool(bool),
 }
 
 impl Arg {

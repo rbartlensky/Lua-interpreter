@@ -42,3 +42,9 @@ pub fn ldt(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     vm.registers[first_arg(instr) as usize] = LuaVal::from(val);
     Ok(())
 }
+
+pub fn ldb(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
+    let val = second_arg(instr) == 1;
+    vm.registers[first_arg(instr) as usize] = LuaVal::from(val);
+    Ok(())
+}

@@ -69,6 +69,7 @@ const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
     ldn,
     ldt,
     umn,
+    ldb,
 ];
 
 pub struct StackFrame {

@@ -828,6 +828,18 @@ impl<'a> LuaToIR<'a> {
                             panic!("Cannot use '...' outside of a vararg function.")
                         }
                     }
+                    lua5_3_l::T_FALSE => {
+                        let new_reg = self.curr_func().get_new_reg();
+                        self.instrs()
+                            .push(Instr::TwoArg(MOV, Arg::Reg(new_reg), Arg::Bool(false)));
+                        new_reg
+                    }
+                    lua5_3_l::T_TRUE => {
+                        let new_reg = self.curr_func().get_new_reg();
+                        self.instrs()
+                            .push(Instr::TwoArg(MOV, Arg::Reg(new_reg), Arg::Bool(true)));
+                        new_reg
+                    }
                     _ => panic!(
                         "Cannot compile terminals that are not variable names, numbers or strings."
                     ),
