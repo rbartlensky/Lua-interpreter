@@ -67,7 +67,12 @@ impl ConstantsMap {
         let mut strings = Vec::with_capacity(self.str_map.len());
         strings.resize(self.str_map.len(), String::from(""));
         for (ref k, &v) in self.str_map.iter() {
-            strings[v as usize] = k.to_string();
+            // XXX: there should be a better way to do this...
+            strings[v as usize] = k
+                .to_string()
+                .replace(r"\n", "\n")
+                .replace(r"\t", "\t")
+                .replace(r"\r", "\r");
         }
         strings
     }
