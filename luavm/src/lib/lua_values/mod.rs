@@ -329,6 +329,14 @@ impl LuaVal {
         }
     }
 
+    pub fn set_upvals(&self, upvals: Vec<LuaVal>) -> Result<(), LuaError> {
+        if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
+            unsafe { (*gc_ptr(self.val.get())).value().set_upvals(upvals) }
+        } else {
+            Err(LuaError::NotAClosure)
+        }
+    }
+
     pub fn get_upval(&self, i: usize) -> Result<LuaVal, LuaError> {
         if self.kind() == LuaValKind::Gc || self.kind() == LuaValKind::GcRoot {
             unsafe { (*gc_ptr(self.val.get())).value().get_upval(i) }
@@ -734,7 +742,7 @@ mod tests {
 
     #[test]
     fn closure_type() {
-        let mut main = LuaVal::from(UserFunction::new(0, 0, 0, vec![]));
+        let mut main = LuaVal::from(UserFunction::new(0, 0, 0));
         assert!(main.kind() == LuaValKind::Gc || main.kind() == LuaValKind::GcRoot);
         assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
@@ -762,7 +770,7 @@ mod tests {
             LuaVal::from(3.0),
             LuaVal::from(UserTable::new(HashMap::new())),
             LuaVal::from(String::from("3.0")),
-            LuaVal::from(UserFunction::new(0, 0, 0, vec![])),
+            LuaVal::from(UserFunction::new(0, 0, 0)),
             LuaVal::from(false),
         ]
     }
@@ -1153,7 +1161,7 @@ mod tests {
             LuaVal::from(1.0),
             LuaVal::from(String::from("1.0")),
             LuaVal::from(UserTable::new(HashMap::new())),
-            LuaVal::from(UserFunction::new(0, 0, 0, vec![])),
+            LuaVal::from(UserFunction::new(0, 0, 0)),
         ]
     }
 

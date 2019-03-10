@@ -116,7 +116,7 @@ impl Vm {
         let closure = {
             let index = bytecode.get_main_function();
             let main = bytecode.get_function(index);
-            let func = UserFunction::new(index, 0, main.param_count(), vec![env.clone()]);
+            let func = UserFunction::with_upvals(index, 0, main.param_count(), vec![env.clone()]);
             LuaVal::from(func)
         };
         let mut stack_frames = Vec::with_capacity(255);

@@ -16,7 +16,8 @@ pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     for _ in 0..upvals_len {
         upvals.push(LuaVal::new());
     }
-
+    let ufunc = UserFunction::new(func.index(), func.reg_count(), func.param_count());
+    vm.registers[first_arg(instr) as usize] = LuaVal::from(ufunc);
     let caller_index = vm.stack_frames[vm.curr_frame].closure.index()?;
     if let Some(provides) = vm
         .bytecode
@@ -35,8 +36,7 @@ pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
             };
         }
     }
-    let ufunc = UserFunction::new(func.index(), func.reg_count(), func.param_count(), upvals);
-    vm.registers[first_arg(instr) as usize] = LuaVal::from(ufunc);
+    vm.registers[first_arg(instr) as usize].set_upvals(upvals)?;
     Ok(())
 }
 

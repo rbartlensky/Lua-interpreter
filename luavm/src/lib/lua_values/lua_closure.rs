@@ -20,7 +20,17 @@ pub struct UserFunction {
 }
 
 impl UserFunction {
-    pub fn new(
+    pub fn new(index: usize, reg_count: usize, param_count: usize) -> UserFunction {
+        UserFunction {
+            index,
+            reg_count,
+            param_count,
+            ret_vals: Cell::new(0),
+            upvals: GcCell::new(vec![]),
+        }
+    }
+
+    pub fn with_upvals(
         index: usize,
         reg_count: usize,
         param_count: usize,
@@ -68,6 +78,11 @@ impl GcVal for UserFunction {
 
     fn inc_ret_vals(&self, amount: usize) -> Result<(), LuaError> {
         self.ret_vals.set(self.ret_vals.get() + amount);
+        Ok(())
+    }
+
+    fn set_upvals(&self, upvals: Vec<LuaVal>) -> Result<(), LuaError> {
+        *self.upvals.borrow_mut() = upvals;
         Ok(())
     }
 
@@ -129,6 +144,12 @@ impl GcVal for BuiltinFunction {
     fn inc_ret_vals(&self, amount: usize) -> Result<(), LuaError> {
         self.ret_vals.set(self.ret_vals.get() + amount);
         Ok(())
+    }
+
+    fn set_upvals(&self, _upvals: Vec<LuaVal>) -> Result<(), LuaError> {
+        Err(LuaError::Error(
+            "SetUpvals doesn't work on BuiltinFunctions.".to_string(),
+        ))
     }
 
     fn get_upval(&self, _: usize) -> Result<LuaVal, LuaError> {

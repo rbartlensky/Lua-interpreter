@@ -82,6 +82,11 @@ pub trait GcVal: Trace + Finalize {
     }
 
     #[inline]
+    fn set_upvals(&self, _upvals: Vec<LuaVal>) -> Result<(), LuaError> {
+        Err(LuaError::NotAClosure)
+    }
+
+    #[inline]
     fn get_upval(&self, _i: usize) -> Result<LuaVal, LuaError> {
         Err(LuaError::NotAClosure)
     }
