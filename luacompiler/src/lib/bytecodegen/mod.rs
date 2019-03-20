@@ -201,7 +201,7 @@ impl<'a> LuaIRToLuaBc<'a> {
             Jmp => {
                 let len = instrs.len();
                 instrs.push(if let Instr::OneArg(_, arg1) = instr {
-                    self.branches.push((len, arg1.get_some()));
+                    self.branches.push((len, arg1.get_block()));
                     make_instr(opcode.to_opcode(), 0, 0, 0)
                 } else {
                     panic!("Not enough arguments for {:?}!", opcode)
@@ -210,7 +210,7 @@ impl<'a> LuaIRToLuaBc<'a> {
             JmpNE => {
                 let len = instrs.len();
                 instrs.push(if let Instr::ThreeArg(_, arg1, _, arg3) = instr {
-                    self.branches.push((len, arg3.get_some()));
+                    self.branches.push((len, arg3.get_block()));
                     make_instr(opcode.to_opcode(), arg1.get_reg() as u8, 0, 0)
                 } else {
                     panic!("Not enough arguments for {:?}!", opcode)
@@ -219,7 +219,7 @@ impl<'a> LuaIRToLuaBc<'a> {
             JmpEQ => {
                 let len = instrs.len();
                 instrs.push(if let Instr::ThreeArg(_, arg1, arg2, _) = instr {
-                    self.branches.push((len, arg2.get_some()));
+                    self.branches.push((len, arg2.get_block()));
                     make_instr(opcode.to_opcode(), arg1.get_reg() as u8, 0, 0)
                 } else {
                     panic!("Not enough arguments for {:?}!", opcode)

@@ -11,6 +11,7 @@ pub enum Arg {
     Func(usize),
     Some(usize),
     Bool(bool),
+    Block(usize),
 }
 
 impl Arg {
@@ -51,6 +52,14 @@ impl Arg {
             *f
         } else {
             panic!("Arg was not a Func; received {:?}", self)
+        }
+    }
+
+    pub fn get_block(&self) -> usize {
+        if let Arg::Block(b) = self {
+            *b
+        } else {
+            panic!("Arg was not a Block; received {:?}", self)
         }
     }
 }

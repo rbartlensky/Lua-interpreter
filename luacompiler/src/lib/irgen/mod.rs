@@ -945,8 +945,8 @@ impl<'a> LuaToIR<'a> {
         self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
             JmpEQ,
             Arg::Reg(left),
-            Arg::Some(merge_branch),
-            Arg::Some(false_branch),
+            Arg::Block(merge_branch),
+            Arg::Block(false_branch),
         ));
         merge_reg
     }
@@ -966,8 +966,8 @@ impl<'a> LuaToIR<'a> {
         self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
             JmpNE,
             Arg::Reg(left),
-            Arg::Some(false_branch),
-            Arg::Some(merge_branch),
+            Arg::Block(false_branch),
+            Arg::Block(merge_branch),
         ));
         merge_reg
     }
@@ -998,8 +998,8 @@ impl<'a> LuaToIR<'a> {
         self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
             JmpNE,
             Arg::Reg(left),
-            Arg::Some(false_branch),
-            Arg::Some(merge_branch),
+            Arg::Block(false_branch),
+            Arg::Block(merge_branch),
         ));
         merge_reg
     }
@@ -1016,8 +1016,8 @@ impl<'a> LuaToIR<'a> {
         self.get_block(parent).mut_instrs().push(Instr::ThreeArg(
             JmpEQ,
             Arg::Reg(left),
-            Arg::Some(false_branch),
-            Arg::Some(merge_branch),
+            Arg::Block(false_branch),
+            Arg::Block(merge_branch),
         ));
         merge_reg
     }
@@ -1276,8 +1276,8 @@ impl<'a> LuaToIR<'a> {
                 self.instrs().push(Instr::ThreeArg(
                     JmpNE,
                     Arg::Reg(expr_res),
-                    Arg::Some(true_block),
-                    Arg::Some(elif_block),
+                    Arg::Block(true_block),
+                    Arg::Block(elif_block),
                 ));
                 self.curr_block = elif_block;
                 self.curr_block().push_dominator(before);
@@ -1298,7 +1298,7 @@ impl<'a> LuaToIR<'a> {
             self.generate_phis_for_bb(branch);
             self.get_block(branch)
                 .mut_instrs()
-                .push(Instr::OneArg(Jmp, Arg::Some(curr)));
+                .push(Instr::OneArg(Jmp, Arg::Block(curr)));
             self.get_block(curr).push_parent(branch);
         }
         if !process_else {
@@ -1385,7 +1385,7 @@ impl<'a> LuaToIR<'a> {
         // compile expr in a new block, and create a branching instruction to it
         self.curr_block()
             .mut_instrs()
-            .push(Instr::OneArg(Jmp, Arg::Some(parent + 1)));
+            .push(Instr::OneArg(Jmp, Arg::Block(parent + 1)));
         // the block in which the condition is compiled
         let cond_start = self.curr_func().create_block_with_parents(vec![parent]);
         self.get_block(cond_start).push_dominator(parent);
@@ -1428,8 +1428,8 @@ impl<'a> LuaToIR<'a> {
             .push(Instr::ThreeArg(
                 JmpNE,
                 Arg::Reg(expr_reg),
-                Arg::Some(while_block),
-                Arg::Some(last_block + 1),
+                Arg::Block(while_block),
+                Arg::Block(last_block + 1),
             ));
         self.curr_block = last_block;
         // add any additional instructions
@@ -1442,7 +1442,7 @@ impl<'a> LuaToIR<'a> {
         // jump back to the start of the expression evaluation
         self.curr_block()
             .mut_instrs()
-            .push(Instr::OneArg(Jmp, Arg::Some(while_cond_start)));
+            .push(Instr::OneArg(Jmp, Arg::Block(while_cond_start)));
         // generate the block after the while loop
         let after_block = self
             .curr_func()
@@ -2033,15 +2033,15 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(1)),
-                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+                Instr::ThreeArg(JmpNE, Reg(0), Block(1), Block(2)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(1), Int(2)),
-                Instr::OneArg(Jmp, Some(3)),
+                Instr::OneArg(Jmp, Block(3)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(2), Int(2)),
-                Instr::OneArg(Jmp, Some(3)),
+                Instr::OneArg(Jmp, Block(3)),
             ],
             vec![],
         ];
@@ -2069,11 +2069,11 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(1)),
-                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+                Instr::ThreeArg(JmpNE, Reg(0), Block(1), Block(2)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(1), Int(2)),
-                Instr::OneArg(Jmp, Some(2)),
+                Instr::OneArg(Jmp, Block(2)),
             ],
             vec![],
         ];
@@ -2109,25 +2109,25 @@ mod tests {
                 Instr::TwoArg(MOV, Reg(0), Nil),
                 Instr::TwoArg(MOV, Reg(1), Nil),
                 Instr::TwoArg(MOV, Reg(2), Nil),
-                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+                Instr::ThreeArg(JmpNE, Reg(0), Block(1), Block(2)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(3), Int(2)),
-                Instr::OneArg(Jmp, Some(7)),
+                Instr::OneArg(Jmp, Block(7)),
             ],
-            vec![Instr::ThreeArg(JmpNE, Reg(1), Some(3), Some(4))],
+            vec![Instr::ThreeArg(JmpNE, Reg(1), Block(3), Block(4))],
             vec![
                 Instr::TwoArg(MOV, Reg(4), Int(3)),
-                Instr::OneArg(Jmp, Some(7)),
+                Instr::OneArg(Jmp, Block(7)),
             ],
-            vec![Instr::ThreeArg(JmpNE, Reg(2), Some(5), Some(6))],
+            vec![Instr::ThreeArg(JmpNE, Reg(2), Block(5), Block(6))],
             vec![
                 Instr::TwoArg(MOV, Reg(5), Int(4)),
-                Instr::OneArg(Jmp, Some(7)),
+                Instr::OneArg(Jmp, Block(7)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(6), Int(5)),
-                Instr::OneArg(Jmp, Some(7)),
+                Instr::OneArg(Jmp, Block(7)),
             ],
             vec![Instr::NArg(
                 Phi,
@@ -2179,16 +2179,16 @@ mod tests {
             vec![
                 Instr::TwoArg(MOV, Reg(0), Nil),
                 Instr::TwoArg(MOV, Reg(1), Nil),
-                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+                Instr::ThreeArg(JmpNE, Reg(0), Block(1), Block(2)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(2), Int(2)),
-                Instr::OneArg(Jmp, Some(4)),
+                Instr::OneArg(Jmp, Block(4)),
             ],
-            vec![Instr::ThreeArg(JmpNE, Reg(1), Some(3), Some(4))],
+            vec![Instr::ThreeArg(JmpNE, Reg(1), Block(3), Block(4))],
             vec![
                 Instr::TwoArg(MOV, Reg(3), Int(3)),
-                Instr::OneArg(Jmp, Some(4)),
+                Instr::OneArg(Jmp, Block(4)),
             ],
             vec![Instr::NArg(Phi, vec![Reg(1), Reg(2), Reg(3)])],
         ];
@@ -2220,17 +2220,17 @@ mod tests {
             vec![
                 Instr::TwoArg(MOV, Reg(0), Nil),
                 Instr::TwoArg(MOV, Reg(1), Nil),
-                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(4)),
+                Instr::ThreeArg(JmpNE, Reg(0), Block(1), Block(4)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(2), Int(2)),
-                Instr::ThreeArg(JmpNE, Reg(2), Some(2), Some(3)),
+                Instr::ThreeArg(JmpNE, Reg(2), Block(2), Block(3)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(3), Int(3)),
-                Instr::OneArg(Jmp, Some(3)),
+                Instr::OneArg(Jmp, Block(3)),
             ],
-            vec![Instr::NArg(Phi, vec![Reg(2)]), Instr::OneArg(Jmp, Some(4))],
+            vec![Instr::NArg(Phi, vec![Reg(2)]), Instr::OneArg(Jmp, Block(4))],
             vec![Instr::NArg(Phi, vec![Reg(1), Reg(2)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![1], vec![1, 2], vec![0, 3]];
@@ -2263,21 +2263,21 @@ mod tests {
             vec![
                 Instr::TwoArg(MOV, Reg(0), Nil),
                 Instr::TwoArg(MOV, Reg(1), Nil),
-                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(5)),
+                Instr::ThreeArg(JmpNE, Reg(0), Block(1), Block(5)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(2), Int(2)),
-                Instr::ThreeArg(JmpNE, Reg(2), Some(2), Some(3)),
+                Instr::ThreeArg(JmpNE, Reg(2), Block(2), Block(3)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(3), Int(3)),
-                Instr::OneArg(Jmp, Some(4)),
+                Instr::OneArg(Jmp, Block(4)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(4), Int(4)),
-                Instr::OneArg(Jmp, Some(4)),
+                Instr::OneArg(Jmp, Block(4)),
             ],
-            vec![Instr::NArg(Phi, vec![Reg(2)]), Instr::OneArg(Jmp, Some(5))],
+            vec![Instr::NArg(Phi, vec![Reg(2)]), Instr::OneArg(Jmp, Block(5))],
             vec![Instr::NArg(Phi, vec![Reg(1), Reg(2)])],
         ];
         let expected_parents = vec![vec![], vec![0], vec![1], vec![1], vec![2, 3], vec![0, 4]];
@@ -2305,13 +2305,13 @@ mod tests {
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(2)),
                 Instr::TwoArg(MOV, Reg(1), Int(1)),
-                Instr::OneArg(Jmp, Some(1)),
+                Instr::OneArg(Jmp, Block(1)),
             ],
-            vec![Instr::ThreeArg(JmpNE, Reg(0), Some(2), Some(3))],
+            vec![Instr::ThreeArg(JmpNE, Reg(0), Block(2), Block(3))],
             vec![
                 Instr::TwoArg(MOV, Reg(2), Int(1)),
                 Instr::ThreeArg(ADD, Reg(3), Reg(1), Reg(2)),
-                Instr::OneArg(Jmp, Some(1)),
+                Instr::OneArg(Jmp, Block(1)),
             ],
             vec![Instr::NArg(Phi, vec![Reg(1), Reg(3)])],
         ];
@@ -2333,7 +2333,7 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(0)),
-                Instr::ThreeArg(JmpEQ, Reg(0), Some(2), Some(1)),
+                Instr::ThreeArg(JmpEQ, Reg(0), Block(2), Block(1)),
             ],
             vec![Instr::TwoArg(MOV, Reg(1), Int(1))],
             vec![Instr::NArg(Phi, vec![Reg(2), Reg(0), Reg(1)])],
@@ -2356,7 +2356,7 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(0)),
-                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+                Instr::ThreeArg(JmpNE, Reg(0), Block(1), Block(2)),
             ],
             vec![Instr::TwoArg(MOV, Reg(1), Int(1))],
             vec![Instr::NArg(Phi, vec![Reg(2), Reg(0), Reg(1)])],
@@ -2522,7 +2522,7 @@ mod tests {
                 Instr::TwoArg(MOV, Reg(0), Int(2)),
                 Instr::TwoArg(MOV, Reg(1), Int(3)),
                 Instr::NArg(Phi, vec![Reg(0), Reg(1)]),
-                Instr::ThreeArg(JmpNE, Reg(0), Some(1), Some(2)),
+                Instr::ThreeArg(JmpNE, Reg(0), Block(1), Block(2)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(2), Int(4)),
@@ -2534,7 +2534,7 @@ mod tests {
                 Instr::NArg(Phi, vec![Reg(4), Reg(5)]),
                 Instr::TwoArg(MOV, Reg(7), Int(9)),
                 Instr::NArg(Phi, vec![Reg(6), Reg(7)]),
-                Instr::OneArg(Jmp, Some(2)),
+                Instr::OneArg(Jmp, Block(2)),
             ],
             vec![
                 Instr::NArg(Phi, vec![Reg(0), Reg(2)]),
@@ -2564,32 +2564,32 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(1)),
-                Instr::OneArg(Jmp, Some(1)),
+                Instr::OneArg(Jmp, Block(1)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(1), Int(10)),
                 Instr::ThreeArg(LT, Reg(2), Reg(0), Reg(1)),
-                Instr::ThreeArg(JmpNE, Reg(2), Some(2), Some(6)),
+                Instr::ThreeArg(JmpNE, Reg(2), Block(2), Block(6)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(3), Int(1)),
-                Instr::OneArg(Jmp, Some(3)),
+                Instr::OneArg(Jmp, Block(3)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(4), Int(5)),
                 Instr::ThreeArg(LT, Reg(5), Reg(3), Reg(4)),
-                Instr::ThreeArg(JmpNE, Reg(5), Some(4), Some(5)),
+                Instr::ThreeArg(JmpNE, Reg(5), Block(4), Block(5)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(6), Int(1)),
                 Instr::ThreeArg(ADD, Reg(7), Reg(3), Reg(6)),
-                Instr::OneArg(Jmp, Some(3)),
+                Instr::OneArg(Jmp, Block(3)),
             ],
             vec![
                 Instr::NArg(Phi, vec![Reg(3), Reg(7)]),
                 Instr::TwoArg(MOV, Reg(8), Int(1)),
                 Instr::ThreeArg(ADD, Reg(9), Reg(0), Reg(8)),
-                Instr::OneArg(Jmp, Some(1)),
+                Instr::OneArg(Jmp, Block(1)),
             ],
             vec![Instr::NArg(Phi, vec![Reg(0), Reg(9)])],
         ];
