@@ -12,6 +12,7 @@ pub enum Arg {
     Some(usize),
     Bool(bool),
     Block(usize),
+    Upval(usize),
 }
 
 impl Arg {
@@ -60,6 +61,14 @@ impl Arg {
             *b
         } else {
             panic!("Arg was not a Block; received {:?}", self)
+        }
+    }
+
+    pub fn get_upval(&self) -> usize {
+        if let Arg::Upval(u) = self {
+            *u
+        } else {
+            panic!("Arg was not an Upval; received {:?}", self)
         }
     }
 }

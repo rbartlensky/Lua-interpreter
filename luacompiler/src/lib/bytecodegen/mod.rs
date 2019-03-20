@@ -176,7 +176,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                     instrs.push(make_instr(
                         opcode.to_opcode(),
                         reg as u8,
-                        arg2.get_some() as u8,
+                        arg2.get_upval() as u8,
                         reg,
                     ));
                 }
@@ -192,7 +192,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                     ));
                     instrs.push(make_instr(
                         opcode.to_opcode(),
-                        arg1.get_some() as u8,
+                        arg1.get_upval() as u8,
                         last_reg,
                         reg,
                     ));
@@ -242,7 +242,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                     instrs.push(make_instr(
                         opcode.to_opcode(),
                         arg1.get_reg() as u8,
-                        arg2.get_some() as u8,
+                        arg2.get_upval() as u8,
                         0,
                     ))
                 } else {
@@ -253,7 +253,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                 if let Instr::TwoArg(_, arg1, arg2) = instr {
                     instrs.push(make_instr(
                         opcode.to_opcode(),
-                        arg1.get_some() as u8,
+                        arg1.get_upval() as u8,
                         arg2.get_reg() as u8,
                         0,
                     ))

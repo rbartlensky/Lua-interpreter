@@ -152,13 +152,13 @@ impl<'a> LuaToIR<'a> {
         if let Some(upval_idx) = self.get_upval(name) {
             self.instrs().push(Instr::TwoArg(
                 SetUpVal,
-                Arg::Some(upval_idx + 1),
+                Arg::Upval(upval_idx + 1),
                 Arg::Reg(value),
             ));
         } else {
             self.instrs().push(Instr::ThreeArg(
                 SetUpAttr,
-                Arg::Some(0),
+                Arg::Upval(0),
                 Arg::Str(name.to_string()),
                 Arg::Reg(value),
             ));
@@ -566,13 +566,13 @@ impl<'a> LuaToIR<'a> {
                     self.instrs().push(Instr::TwoArg(
                         GetUpVal,
                         Arg::Reg(reg),
-                        Arg::Some(upval_idx + 1),
+                        Arg::Upval(upval_idx + 1),
                     ))
                 } else {
                     self.instrs().push(Instr::ThreeArg(
                         GetUpAttr,
                         Arg::Reg(reg),
-                        Arg::Some(0),
+                        Arg::Upval(0),
                         Arg::Str(name.to_string()),
                     ));
                 }
@@ -1710,7 +1710,7 @@ mod tests {
             Instr::ThreeArg(ADD, Reg(10), Reg(0), Reg(9)),
             Instr::TwoArg(MOV, Reg(11), Int(2)),
             Instr::ThreeArg(SUB, Reg(12), Reg(10), Reg(11)),
-            Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(12)),
+            Instr::ThreeArg(SetUpAttr, Upval(0), Str("x".to_string()), Reg(12)),
         ];
         assert!(ir.functions.len() == 1);
         let blocks = &ir.functions[0].blocks();
@@ -1728,9 +1728,9 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             Instr::TwoArg(MOV, Reg(0), Int(1)),
-            Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(0)),
-            Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("x".to_string())),
-            Instr::ThreeArg(SetUpAttr, Some(0), Str("y".to_string()), Reg(1)),
+            Instr::ThreeArg(SetUpAttr, Upval(0), Str("x".to_string()), Reg(0)),
+            Instr::ThreeArg(GetUpAttr, Reg(1), Upval(0), Str("x".to_string())),
+            Instr::ThreeArg(SetUpAttr, Upval(0), Str("y".to_string()), Reg(1)),
         ];
         assert!(ir.functions.len() == 1);
         let blocks = &ir.functions[ir.main_func].blocks();
@@ -1748,7 +1748,7 @@ mod tests {
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![
             Instr::TwoArg(MOV, Reg(0), Int(2)),
-            Instr::ThreeArg(SetUpAttr, Some(0), Str("y".to_string()), Reg(0)),
+            Instr::ThreeArg(SetUpAttr, Upval(0), Str("y".to_string()), Reg(0)),
         ];
         assert!(ir.functions.len() == 1);
         let blocks = &ir.functions[0].blocks();
@@ -1768,11 +1768,11 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("f".to_string()), Reg(0)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(3)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("x".to_string()), Reg(0)),
             ],
         ];
         assert!(ir.functions.len() == 2);
@@ -1797,17 +1797,17 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
-                Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("f".to_string())),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(GetUpAttr, Reg(1), Upval(0), Str("f".to_string())),
                 Instr::OneArg(SetTop, Reg(1)),
                 Instr::OneArg(CALL, Reg(1)),
-                Instr::ThreeArg(GetUpAttr, Reg(2), Some(0), Str("f".to_string())),
+                Instr::ThreeArg(GetUpAttr, Reg(2), Upval(0), Str("f".to_string())),
                 Instr::OneArg(SetTop, Reg(2)),
                 Instr::OneArg(CALL, Reg(2)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(3)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("x".to_string()), Reg(0)),
             ],
         ];
         assert!(ir.functions.len() == 2);
@@ -1832,21 +1832,21 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
-                Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("f".to_string())),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(GetUpAttr, Reg(1), Upval(0), Str("f".to_string())),
                 Instr::OneArg(SetTop, Reg(1)),
                 Instr::TwoArg(MOV, Reg(2), Int(2)),
                 Instr::OneArg(PUSH, Reg(2)),
                 Instr::OneArg(CALL, Reg(1)),
-                Instr::ThreeArg(GetUpAttr, Reg(3), Some(0), Str("f".to_string())),
+                Instr::ThreeArg(GetUpAttr, Reg(3), Upval(0), Str("f".to_string())),
                 Instr::OneArg(SetTop, Reg(3)),
-                Instr::ThreeArg(GetUpAttr, Reg(4), Some(0), Str("x".to_string())),
+                Instr::ThreeArg(GetUpAttr, Reg(4), Upval(0), Str("x".to_string())),
                 Instr::OneArg(PUSH, Reg(4)),
                 Instr::OneArg(CALL, Reg(3)),
             ],
             vec![Instr::ThreeArg(
                 SetUpAttr,
-                Some(0),
+                Upval(0),
                 Str("x".to_string()),
                 Reg(0),
             )],
@@ -1879,8 +1879,8 @@ mod tests {
             Instr::TwoArg(MOV, Reg(7), Int(6)),
             Instr::TwoArg(MOV, Reg(8), Int(1)),
             Instr::TwoArg(MOV, Reg(9), Nil),
-            Instr::ThreeArg(SetUpAttr, Some(0), Str("a".to_string()), Reg(8)),
-            Instr::ThreeArg(SetUpAttr, Some(0), Str("b".to_string()), Reg(9)),
+            Instr::ThreeArg(SetUpAttr, Upval(0), Str("a".to_string()), Reg(8)),
+            Instr::ThreeArg(SetUpAttr, Upval(0), Str("b".to_string()), Reg(9)),
             Instr::NArg(Phi, vec![Reg(0), Reg(4)]),
             Instr::NArg(Phi, vec![Reg(1), Reg(5)]),
             Instr::NArg(Phi, vec![Reg(2), Reg(6)]),
@@ -1905,8 +1905,8 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
-                Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("f".to_string())),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(GetUpAttr, Reg(1), Upval(0), Str("f".to_string())),
                 Instr::OneArg(SetTop, Reg(1)),
                 Instr::TwoArg(MOV, Reg(2), Int(1)),
                 Instr::OneArg(PUSH, Reg(2)),
@@ -1922,7 +1922,7 @@ mod tests {
                 Instr::TwoArg(MOV, Reg(2), Reg(0)),
                 Instr::TwoArg(VarArg, Reg(3), Some(0)),
                 Instr::TwoArg(VarArg, Reg(4), Some(1)),
-                Instr::ThreeArg(GetUpAttr, Reg(5), Some(0), Str("f".to_string())),
+                Instr::ThreeArg(GetUpAttr, Reg(5), Upval(0), Str("f".to_string())),
                 Instr::OneArg(SetTop, Reg(5)),
                 Instr::OneArg(VarArg, Some(1)),
                 Instr::OneArg(CALL, Reg(5)),
@@ -1949,8 +1949,8 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
-                Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("f".to_string())),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(GetUpAttr, Reg(1), Upval(0), Str("f".to_string())),
                 Instr::OneArg(SetTop, Reg(1)),
                 Instr::TwoArg(MOV, Reg(2), Int(1)),
                 Instr::OneArg(PUSH, Reg(2)),
@@ -1965,9 +1965,9 @@ mod tests {
             vec![
                 Instr::TwoArg(VarArg, Reg(2), Some(0)),
                 Instr::TwoArg(VarArg, Reg(3), Some(1)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(0)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("y".to_string()), Reg(2)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("z".to_string()), Reg(3)),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("x".to_string()), Reg(0)),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("y".to_string()), Reg(2)),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("z".to_string()), Reg(3)),
             ],
         ];
         assert!(ir.functions.len() == 2);
@@ -1991,12 +1991,12 @@ mod tests {
         let expected_instrs = vec![
             vec![
                 Instr::TwoArg(CLOSURE, Reg(0), Func(1)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(0)),
-                Instr::ThreeArg(GetUpAttr, Reg(1), Some(0), Str("f".to_string())),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("f".to_string()), Reg(0)),
+                Instr::ThreeArg(GetUpAttr, Reg(1), Upval(0), Str("f".to_string())),
                 Instr::OneArg(SetTop, Reg(1)),
                 Instr::TwoArg(MOV, Reg(2), Int(1)),
                 Instr::OneArg(PUSH, Reg(2)),
-                Instr::ThreeArg(GetUpAttr, Reg(3), Some(0), Str("f".to_string())),
+                Instr::ThreeArg(GetUpAttr, Reg(3), Upval(0), Str("f".to_string())),
                 Instr::OneArg(SetTop, Reg(3)),
                 Instr::TwoArg(MOV, Reg(4), Int(5)),
                 Instr::OneArg(PUSH, Reg(4)),
@@ -2377,19 +2377,19 @@ mod tests {
         let pt = &LuaParseTree::from_str(String::from("a[1][2], b, c[3].d = 5, 6")).unwrap();
         let ir = compile_to_ir(pt);
         let expected_instrs = vec![vec![
-            Instr::ThreeArg(GetUpAttr, Reg(0), Some(0), Str("a".to_string())),
+            Instr::ThreeArg(GetUpAttr, Reg(0), Upval(0), Str("a".to_string())),
             Instr::TwoArg(MOV, Reg(1), Int(1)),
             Instr::ThreeArg(GetAttr, Reg(2), Reg(0), Reg(1)),
             Instr::TwoArg(MOV, Reg(3), Int(2)),
             Instr::TwoArg(MOV, Reg(4), Int(5)),
             Instr::TwoArg(MOV, Reg(5), Int(6)),
-            Instr::ThreeArg(GetUpAttr, Reg(6), Some(0), Str("c".to_string())),
+            Instr::ThreeArg(GetUpAttr, Reg(6), Upval(0), Str("c".to_string())),
             Instr::TwoArg(MOV, Reg(7), Int(3)),
             Instr::ThreeArg(GetAttr, Reg(8), Reg(6), Reg(7)),
             Instr::TwoArg(MOV, Reg(9), Str("d".to_string())),
             Instr::TwoArg(MOV, Reg(10), Nil),
             Instr::ThreeArg(SetAttr, Reg(2), Reg(3), Reg(4)),
-            Instr::ThreeArg(SetUpAttr, Some(0), Str("b".to_string()), Reg(5)),
+            Instr::ThreeArg(SetUpAttr, Upval(0), Str("b".to_string()), Reg(5)),
             Instr::ThreeArg(SetAttr, Reg(8), Reg(9), Reg(10)),
         ]];
         let expected_parents = vec![vec![]];
@@ -2418,13 +2418,13 @@ mod tests {
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(2)),
                 Instr::TwoArg(CLOSURE, Reg(1), Func(1)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(1)),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("f".to_string()), Reg(1)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(3)),
-                Instr::TwoArg(SetUpVal, Some(1), Reg(0)),
+                Instr::TwoArg(SetUpVal, Upval(1), Reg(0)),
                 Instr::TwoArg(MOV, Reg(1), Int(2)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("x".to_string()), Reg(1)),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("x".to_string()), Reg(1)),
             ],
         ];
         let expected_provides = vec![
@@ -2460,16 +2460,16 @@ mod tests {
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(2)),
                 Instr::TwoArg(CLOSURE, Reg(1), Func(1)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("f".to_string()), Reg(1)),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("f".to_string()), Reg(1)),
             ],
             vec![
                 Instr::TwoArg(MOV, Reg(0), Int(3)),
                 Instr::TwoArg(CLOSURE, Reg(1), Func(2)),
-                Instr::ThreeArg(SetUpAttr, Some(0), Str("g".to_string()), Reg(1)),
+                Instr::ThreeArg(SetUpAttr, Upval(0), Str("g".to_string()), Reg(1)),
             ],
             vec![
-                Instr::TwoArg(GetUpVal, Reg(0), Some(1)),
-                Instr::TwoArg(GetUpVal, Reg(1), Some(2)),
+                Instr::TwoArg(GetUpVal, Reg(0), Upval(1)),
+                Instr::TwoArg(GetUpVal, Reg(1), Upval(2)),
                 Instr::ThreeArg(ADD, Reg(2), Reg(0), Reg(1)),
             ],
         ];
