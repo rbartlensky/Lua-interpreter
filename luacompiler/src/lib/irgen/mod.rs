@@ -331,13 +331,13 @@ impl<'a> LuaToIR<'a> {
                         ridx: RIdx(ridx),
                         ref nodes,
                     } if ridx == lua5_3_y::R_EQEXPLISTOPT => {
-                        let names = self.compile_names(&stat_nodes[1]);
+                        let names = self.compile_namelist(&stat_nodes[1]);
                         let exprs = if nodes.len() > 0 {
                             self.get_underlying_exprs(&nodes[1])
                         } else {
                             vec![]
                         };
-                        self.compile_local_assignments(names, exprs);
+                        self.compile_assignments(names, exprs, true);
                     }
                     _ => {}
                 }
@@ -355,7 +355,7 @@ impl<'a> LuaToIR<'a> {
                         // x, y, z = 1, 2
                         let names = self.compile_var_list(&stat_nodes[0]);
                         let exprs = self.get_underlying_exprs(&stat_nodes[2]);
-                        self.compile_assignments(names, exprs);
+                        self.compile_assignments(names, exprs, false);
                     }
                     _ => {}
                 }
@@ -404,56 +404,16 @@ impl<'a> LuaToIR<'a> {
         }
     }
 
-    /// Compiles a local multi-assignemnt.
-    /// * `names` - the variable names
-    /// * `exprs` - the expressions that are assigned
-    fn compile_local_assignments(&mut self, names: Vec<&'a str>, exprs: Vec<&'a Node<u8>>) {
-        // example: local a, b, c, d = 1, 2
-        // compile local a = 1, local b = 2
-        for i in 0..exprs.len() {
-            // left hand-side = <namelist> and right hand-side = <explist>
-            self.compile_assignment(VarType::Name(names[i]), exprs[i], AssignmentType::LocalDecl);
-        }
-        // for all the remaining names (c, d), create a new empty register, because the
-        // user might access the variable later
-        if names.len() > exprs.len() {
-            let mut regs = vec![];
-            for i in exprs.len()..names.len() {
-                let new_reg = self.curr_func().get_new_reg();
-                self.set_reg_name(new_reg, names[i], true);
-                regs.push(new_reg);
-            }
-            // check if the last expression is a vararg, so that we can emit the correct
-            // instruction
-            let mut assign_nils = false;
-            if let Some(expr) = exprs.last() {
-                if self.is_unpackable(expr) {
-                    self.unpack(&regs, expr);
-                } else {
-                    assign_nils = true;
-                }
-            } else {
-                assign_nils = true;
-            }
-            if assign_nils {
-                for reg in regs {
-                    self.instrs()
-                        .push(Instr::TwoArg(MOV, Arg::Reg(reg), Arg::Nil));
-                }
-            }
-        } else if names.len() < exprs.len() {
-            // make sure we also compile every expression on the right side
-            // local a = 1, 2, f(); we have to also compile 2, and f()
-            for i in names.len()..exprs.len() {
-                self.compile_expr(exprs[i]);
-            }
-        }
-    }
-
     /// Compiles a multi-assignemnt (a combination of local and global assignments).
     /// * `names` - the variable names
     /// * `exprs` - the expressions that are assigned
-    fn compile_assignments(&mut self, names: Vec<&'a Node<u8>>, exprs: Vec<&'a Node<u8>>) {
+    /// * `is_local_decl` - if the assignments are preceeded by the `local` keyword
+    fn compile_assignments(
+        &mut self,
+        names: Vec<&'a Node<u8>>,
+        exprs: Vec<&'a Node<u8>>,
+        is_local_decl: bool,
+    ) {
         // we want to emit _ENV[<name>] = <reg> only after we assign all expressions into
         // registers. This is because of how vararg expects registers to be ordered.
         // For instance `a, b = ...`, will generate `VarArg 3, 2, 0` meaning that the vm
@@ -461,11 +421,16 @@ impl<'a> LuaToIR<'a> {
         // that a, and b point to consecutive registers, but a global assignment will
         // generate additional instructions, which we try to postpone
         let mut postponed_instrs: Vec<(VarType<'a>, usize)> = vec![];
-        // example: x, y, z, w = 1, 2
+        // example: (local) x, y, z, w = 1, 2
         // compile x = 1, y = 2
         for (name, expr) in names.iter().zip(exprs.iter()) {
             let var = self.compile_var_or_name(name);
-            let res = self.compile_assignment(var, expr, AssignmentType::Postponed);
+            let assignment_type = if is_local_decl {
+                AssignmentType::LocalDecl
+            } else {
+                AssignmentType::Postponed
+            };
+            let res = self.compile_assignment(var, expr, assignment_type);
             match res {
                 ResultType::Global(reg) => {
                     postponed_instrs.push((var, reg));
@@ -487,10 +452,10 @@ impl<'a> LuaToIR<'a> {
                 let reg = self.curr_func().get_new_reg();
                 match var {
                     VarType::Name(name) => {
-                        if !self.is_local(name) {
-                            postponed_instrs.push((var, reg));
+                        if is_local_decl || self.is_local(name) {
+                            self.set_reg_name(reg, name, is_local_decl);
                         } else {
-                            self.set_reg_name(reg, name, false);
+                            postponed_instrs.push((var, reg));
                         }
                     }
                     VarType::Dict(..) => {
@@ -499,15 +464,12 @@ impl<'a> LuaToIR<'a> {
                 }
                 regs.push(reg);
             }
-            let mut assign_nils = false;
+            let mut assign_nils = true;
             if let Some(expr) = exprs.last() {
                 if self.is_unpackable(expr) {
                     self.unpack(&regs, expr);
-                } else {
-                    assign_nils = true;
+                    assign_nils = false;
                 }
-            } else {
-                assign_nils = true;
             }
             if assign_nils {
                 for reg in regs {
@@ -1083,6 +1045,27 @@ impl<'a> LuaToIR<'a> {
                 names
             }
             _ => panic!("Root node is not a <namelist> or a <varlist>"),
+        }
+    }
+
+    fn compile_namelist(&self, names: &'a Node<u8>) -> Vec<&'a Node<u8>> {
+        match *names {
+            Nonterm {
+                ridx: RIdx(ridx),
+                ref nodes,
+            } if ridx == lua5_3_y::R_NAMELIST => {
+                let mut names = vec![];
+                // nodes = <NAME>
+                if nodes.len() == 1 {
+                    names.push(&nodes[0]);
+                } else {
+                    // nodes = [<namelist>, <COMMA>, <NAME>]
+                    names.extend(self.compile_namelist(&nodes[0]));
+                    names.push(&nodes[2]);
+                }
+                names
+            }
+            _ => panic!("Root node is not a <namelist>"),
         }
     }
 
