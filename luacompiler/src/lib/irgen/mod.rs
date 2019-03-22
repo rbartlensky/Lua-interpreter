@@ -34,7 +34,7 @@ enum AssignmentType {
 enum ResultType {
     Local(usize),
     Global(usize),
-    Dict(usize),
+    Table(usize),
 }
 
 impl ResultType {
@@ -42,7 +42,7 @@ impl ResultType {
         match *self {
             ResultType::Local(reg) => reg,
             ResultType::Global(reg) => reg,
-            ResultType::Dict(..) => panic!("ResultType::Dict has no register"),
+            ResultType::Table(..) => panic!("ResultType::Table has no register"),
         }
     }
 }
@@ -51,14 +51,14 @@ impl ResultType {
 enum VarType<'a> {
     Name(&'a str),
     // from_reg , attr_reg
-    Dict(usize, usize),
+    Table(usize, usize),
 }
 
 impl<'a> VarType<'a> {
     fn get_str(&self) -> &'a str {
         match *self {
             VarType::Name(name) => name,
-            VarType::Dict(..) => panic!("VarType::Dict has no name."),
+            VarType::Table(..) => panic!("VarType::Table has no name."),
         }
     }
 }
@@ -435,7 +435,7 @@ impl<'a> LuaToIR<'a> {
                 ResultType::Global(reg) => {
                     postponed_instrs.push((var, reg));
                 }
-                ResultType::Dict(reg) => {
+                ResultType::Table(reg) => {
                     postponed_instrs.push((var, reg));
                 }
                 _ => {}
@@ -458,7 +458,7 @@ impl<'a> LuaToIR<'a> {
                             postponed_instrs.push((var, reg));
                         }
                     }
-                    VarType::Dict(..) => {
+                    VarType::Table(..) => {
                         postponed_instrs.push((var, reg));
                     }
                 }
@@ -490,7 +490,7 @@ impl<'a> LuaToIR<'a> {
                 VarType::Name(name) => {
                     self.set_upval(name, reg);
                 }
-                VarType::Dict(from, attr) => {
+                VarType::Table(from, attr) => {
                     self.instrs().push(Instr::ThreeArg(
                         SetAttr,
                         Arg::Reg(from),
@@ -557,7 +557,7 @@ impl<'a> LuaToIR<'a> {
                     let var = self.compile_var_or_name(&nodes[0]);
                     match var {
                         VarType::Name(name) => self.find_name(name),
-                        VarType::Dict(from, attr) => {
+                        VarType::Table(from, attr) => {
                             let reg = self.curr_func().get_new_reg();
                             self.instrs().push(Instr::ThreeArg(
                                 GetAttr,
@@ -635,7 +635,7 @@ impl<'a> LuaToIR<'a> {
                     ResultType::Global(value)
                 }
             }
-            VarType::Dict(from, attr) => {
+            VarType::Table(from, attr) => {
                 let reg = self.compile_expr(right);
                 if action != AssignmentType::Postponed {
                     self.instrs().push(Instr::ThreeArg(
@@ -645,7 +645,7 @@ impl<'a> LuaToIR<'a> {
                         Arg::Reg(reg),
                     ));
                 }
-                ResultType::Dict(reg)
+                ResultType::Table(reg)
             }
         }
     }
@@ -662,7 +662,7 @@ impl<'a> LuaToIR<'a> {
                     // nodes = [<prefixexp, <LSQUARE>, <exp>, <RSQUARE>]
                     let prefixexp = self.compile_prefix_exp(&nodes[0]);
                     let expr = self.compile_expr(&nodes[2]);
-                    VarType::Dict(prefixexp, expr)
+                    VarType::Table(prefixexp, expr)
                 } else {
                     let prefixexp = self.compile_prefix_exp(&nodes[0]);
                     let string = self.get_str(&nodes[2]);
@@ -672,7 +672,7 @@ impl<'a> LuaToIR<'a> {
                         Arg::Reg(reg),
                         Arg::Str(string.to_string()),
                     ));
-                    VarType::Dict(prefixexp, reg)
+                    VarType::Table(prefixexp, reg)
                 }
             }
             _ => {
