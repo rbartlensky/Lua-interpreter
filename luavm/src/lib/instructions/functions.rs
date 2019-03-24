@@ -26,13 +26,9 @@ pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
         .get(&(func.index() as u8))
     {
         for (provider, upval) in provides.iter() {
-            match provider {
-                BCProviderType::Reg(r) => {
-                    upvals[*upval as usize] = vm.registers[*r as usize].clone()
-                }
-                BCProviderType::Upval(u) => {
-                    upvals[*upval as usize] = vm.closure().get_upval(*u as usize)?
-                }
+            upvals[*upval as usize] = match provider {
+                BCProviderType::Reg(r) => vm.registers[*r as usize].clone(),
+                BCProviderType::Upval(u) => vm.closure().get_upval(*u as usize)?,
             };
         }
     }
