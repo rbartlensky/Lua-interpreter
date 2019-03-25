@@ -26,9 +26,7 @@ pub fn ldf(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
 pub fn lds(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     let arg2 = second_arg(instr);
     let val = vm.bytecode.get_string(arg2);
-    // we also want to save the index of the string in the constant table in order to
-    // speed up lookups in _ENV
-    vm.registers[first_arg(instr) as usize] = LuaVal::from((val.to_string(), arg2 as usize));
+    vm.registers[first_arg(instr) as usize] = LuaVal::from(val.to_string());
     Ok(())
 }
 

@@ -19,11 +19,7 @@ use instructions::{
     tables::*, upvals::*,
 };
 use lua_std::{io::get_io_module, string::get_string_module};
-use lua_values::{
-    lua_closure::UserFunction,
-    lua_table::{CachingTable, UserTable},
-    LuaVal,
-};
+use lua_values::{lua_closure::UserFunction, lua_table::UserTable, LuaVal};
 use luacompiler::bytecode::{instructions::*, LuaBytecode};
 use std::collections::HashMap;
 use stdlib::STDLIB_FUNCS;
@@ -99,20 +95,8 @@ impl Vm {
     pub fn new(bytecode: LuaBytecode, script_args: Vec<&str>) -> Vm {
         let mut registers: Vec<LuaVal> = Vec::new();
         registers.resize(REG_NUM, LuaVal::new());
-        let mut env = LuaVal::from(CachingTable::new(
-            HashMap::new(),
-            bytecode.get_strings_len(),
-        ));
-        {
-            let rev_strings: HashMap<&str, usize> = bytecode
-                .strings()
-                .iter()
-                .enumerate()
-                .map(|(i, s)| (s.as_str(), i))
-                .collect();
-
-            Vm::init_stdlib_and_args(&script_args, &rev_strings, &mut env);
-        }
+        let mut env = LuaVal::from(UserTable::new(HashMap::new()));
+        Vm::init_stdlib_and_args(&script_args, &mut env);
         let closure = {
             let index = bytecode.get_main_function();
             let main = bytecode.get_function(index);
@@ -133,42 +117,23 @@ impl Vm {
         }
     }
 
-    fn get_string_lua_val(string: &str, rev_strings: &HashMap<&str, usize>) -> LuaVal {
-        if let Some(i) = rev_strings.get(string) {
-            LuaVal::from((string.to_string(), *i))
-        } else {
-            LuaVal::from(string.to_string())
-        }
-    }
-
-    fn init_stdlib_and_args(
-        script_args: &Vec<&str>,
-        rev_strings: &HashMap<&str, usize>,
-        env: &mut LuaVal,
-    ) {
+    fn init_stdlib_and_args(script_args: &Vec<&str>, env: &mut LuaVal) {
         let args = LuaVal::from(UserTable::new(HashMap::new()));
         for (i, sarg) in script_args.iter().enumerate() {
             args.set_attr(LuaVal::from(i as i64), LuaVal::from(sarg.to_string()))
                 .unwrap();
         }
-        env.set_attr(Vm::get_string_lua_val("arg", rev_strings), args)
-            .unwrap();
+        env.set_attr(LuaVal::from("arg".to_string()), args).unwrap();
         for func in STDLIB_FUNCS {
-            env.set_attr(
-                Vm::get_string_lua_val(func.name(), rev_strings),
-                LuaVal::from(func),
-            )
-            .unwrap();
+            env.set_attr(LuaVal::from(func.name().to_string()), LuaVal::from(func))
+                .unwrap();
         }
         let io = get_io_module();
-        env.set_attr(Vm::get_string_lua_val(io.0.as_str(), rev_strings), io.1)
+        env.set_attr(LuaVal::from(io.0.as_str().to_string()), io.1)
             .unwrap();
         let string = get_string_module();
-        env.set_attr(
-            Vm::get_string_lua_val(string.0.as_str(), rev_strings),
-            string.1,
-        )
-        .unwrap();
+        env.set_attr(LuaVal::from(string.0.as_str().to_string()), string.1)
+            .unwrap();
     }
 
     pub fn closure(&self) -> &LuaVal {
@@ -218,20 +183,14 @@ mod tests {
                 .to_string(),
         );
         vm.eval().unwrap();
-        let index_of_x = 0;
         // vm.registers[0] has a reference to the _ENV variable
         // this is true because the compiler always loads the environment into register 0
         assert_eq!(
-            vm.env
-                .get_attr(&LuaVal::from((String::from("x"), index_of_x)))
-                .unwrap(),
+            vm.env.get_attr(&LuaVal::from(String::from("x"))).unwrap(),
             LuaVal::from(3)
         );
-        let index_of_y = 1;
         assert_eq!(
-            vm.env
-                .get_attr(&LuaVal::from((String::from("y"), index_of_y)))
-                .unwrap(),
+            vm.env.get_attr(&LuaVal::from(String::from("y"))).unwrap(),
             LuaVal::from(4)
         );
     }
@@ -247,12 +206,9 @@ mod tests {
             .to_string(),
         );
         vm.eval().unwrap();
-        let index_of_x = 1;
         // env is correctly updated
         assert_eq!(
-            vm.env
-                .get_attr(&LuaVal::from((String::from("x"), index_of_x)))
-                .unwrap(),
+            vm.env.get_attr(&LuaVal::from(String::from("x"))).unwrap(),
             LuaVal::from(3)
         );
     }
@@ -268,12 +224,9 @@ mod tests {
                 .to_string(),
         );
         vm.eval().unwrap();
-        let index_of_x = 1;
         // env is correctly updated
         assert_eq!(
-            vm.env
-                .get_attr(&LuaVal::from((String::from("x"), index_of_x)))
-                .unwrap(),
+            vm.env.get_attr(&LuaVal::from(String::from("x"))).unwrap(),
             LuaVal::from(3)
         );
     }
@@ -289,12 +242,9 @@ mod tests {
                 .to_string(),
         );
         vm.eval().unwrap();
-        let index_of_x = 1;
         // env is correctly updated
         assert_eq!(
-            vm.env
-                .get_attr(&LuaVal::from((String::from("x"), index_of_x)))
-                .unwrap(),
+            vm.env.get_attr(&LuaVal::from(String::from("x"))).unwrap(),
             LuaVal::from(3)
         );
     }
@@ -310,12 +260,9 @@ mod tests {
             .to_string(),
         );
         vm.eval().unwrap();
-        let index_of_x = 1;
         // env is correctly updated
         assert_eq!(
-            vm.env
-                .get_attr(&LuaVal::from((String::from("x"), index_of_x)))
-                .unwrap(),
+            vm.env.get_attr(&LuaVal::from(String::from("x"))).unwrap(),
             LuaVal::new()
         );
     }
@@ -342,7 +289,7 @@ mod tests {
         for i in 1..(strs.len() + 1) {
             assert_eq!(
                 vm.env
-                    .get_attr(&LuaVal::from((String::from(strs[i - 1]), i)))
+                    .get_attr(&LuaVal::from(String::from(strs[i - 1])))
                     .unwrap(),
                 expected_vals[i - 1]
             );
@@ -371,7 +318,7 @@ mod tests {
         for i in 1..(strs.len() + 1) {
             assert_eq!(
                 vm.env
-                    .get_attr(&LuaVal::from((String::from(strs[i - 1]), i)))
+                    .get_attr(&LuaVal::from(String::from(strs[i - 1])))
                     .unwrap(),
                 expected_vals[i - 1]
             );
@@ -405,7 +352,7 @@ mod tests {
         for i in 2..(strs.len() + 2) {
             assert_eq!(
                 vm.env
-                    .get_attr(&LuaVal::from((String::from(strs[i - 2]), i)))
+                    .get_attr(&LuaVal::from(String::from(strs[i - 2])))
                     .unwrap(),
                 expected_vals[i - 2]
             );
@@ -439,7 +386,7 @@ mod tests {
         for i in 2..(strs.len() + 2) {
             assert_eq!(
                 vm.env
-                    .get_attr(&LuaVal::from((String::from(strs[i - 2]), i)))
+                    .get_attr(&LuaVal::from(String::from(strs[i - 2])))
                     .unwrap(),
                 expected_vals[i - 2]
             );
@@ -474,7 +421,7 @@ mod tests {
         for i in 3..(strs.len() + 3) {
             assert_eq!(
                 vm.env
-                    .get_attr(&LuaVal::from((String::from(strs[i - 3]), i)))
+                    .get_attr(&LuaVal::from(String::from(strs[i - 3])))
                     .unwrap(),
                 expected_vals[i - 3]
             );

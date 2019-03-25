@@ -115,14 +115,6 @@ impl LuaVal {
         }
     }
 
-    /// Gets the index of the underlying string in the constant table.
-    pub fn get_constant_index(&self) -> Option<usize> {
-        match self.kind() {
-            LuaValKind::BOXED => unsafe { (*self.as_boxed()).get_constant_index() },
-            _ => None,
-        }
-    }
-
     /// Returns true if the underlying type is either a float or a string.
     /// In Lua, if either of these two types are used in an arithmetic
     /// expression, then both arguments are converted to floats.
@@ -458,28 +450,7 @@ impl From<String> for LuaVal {
     /// Create a float LuaVal.
     fn from(string: String) -> Self {
         LuaVal {
-            val: Cell::new(
-                LuaValKind::BOXED
-                    ^ to_boxed(Box::new(LuaString {
-                        v: string,
-                        const_index: None,
-                    })),
-            ),
-        }
-    }
-}
-
-impl From<(String, usize)> for LuaVal {
-    /// Create a float LuaVal.
-    fn from(string: (String, usize)) -> Self {
-        LuaVal {
-            val: Cell::new(
-                LuaValKind::BOXED
-                    ^ to_boxed(Box::new(LuaString {
-                        v: string.0,
-                        const_index: Some(string.1),
-                    })),
-            ),
+            val: Cell::new(LuaValKind::BOXED ^ to_boxed(Box::new(LuaString { v: string }))),
         }
     }
 }
