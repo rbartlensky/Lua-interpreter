@@ -34,7 +34,7 @@ impl StdFunction {
 }
 
 pub fn lua_print(vm: &mut Vm) -> Result<(), LuaError> {
-    let args_start = vm.stack_frames.last().unwrap().top;
+    let args_start = vm.stack_frames.last().unwrap().start;
     let args_count = vm.top - args_start;
     let mut s = String::new();
     for i in args_start..(args_start + args_count) {
@@ -45,7 +45,7 @@ pub fn lua_print(vm: &mut Vm) -> Result<(), LuaError> {
 }
 
 pub fn lua_assert(vm: &mut Vm) -> Result<(), LuaError> {
-    let args_start = vm.stack_frames.last().unwrap().top;
+    let args_start = vm.stack_frames.last().unwrap().start;
     let args_count = vm.top - args_start;
     if args_count == 0 {
         return Err(LuaError::Error(
@@ -71,7 +71,7 @@ pub fn lua_assert(vm: &mut Vm) -> Result<(), LuaError> {
 }
 
 pub fn lua_tonumber(vm: &mut Vm) -> Result<(), LuaError> {
-    let args_start = vm.stack_frames.last().unwrap().top;
+    let args_start = vm.stack_frames.last().unwrap().start;
     let args_count = vm.top - args_start;
     if args_count == 0 {
         Err(LuaError::Error(

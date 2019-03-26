@@ -47,7 +47,7 @@ pub fn set_top(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     let closure = vm.registers[first_arg(instr) as usize].clone();
     vm.stack_frames.push(StackFrame {
         closure,
-        top: vm.top,
+        start: vm.top,
     });
     Ok(())
 }
@@ -73,7 +73,7 @@ pub fn call(vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
     // update the current frame to the last one
     let old_curr_frame = vm.curr_frame;
     let caller_index = vm.closure().index()?;
-    let args_start = vm.stack_frames.last().unwrap().top;
+    let args_start = vm.stack_frames.last().unwrap().start;
     let args_count = vm.top - args_start;
     vm.curr_frame = vm.stack_frames.len() - 1;
     // update upvals of the callee
@@ -226,7 +226,7 @@ pub fn vararg(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     if third_arg(instr) > 0 {
         let (args_start, args_count, param_count) = {
             let curr_frame = &vm.stack_frames[vm.curr_frame];
-            let start = curr_frame.top;
+            let start = curr_frame.start;
             (
                 start,
                 vm.top - start - curr_frame.closure.reg_count()?,
@@ -244,7 +244,7 @@ pub fn vararg(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
         }
     } else {
         let curr_frame = &vm.stack_frames[vm.curr_frame];
-        let args_start = curr_frame.top;
+        let args_start = curr_frame.start;
         let var_args_start = args_start + curr_frame.closure.param_count()?;
         let from = second_arg(instr) as usize;
         let args_count = vm.top - args_start - curr_frame.closure.reg_count()?;

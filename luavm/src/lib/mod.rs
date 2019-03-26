@@ -70,7 +70,7 @@ const OPCODE_HANDLER: &'static [fn(&mut Vm, u32) -> Result<(), LuaError>] = &[
 
 pub struct StackFrame {
     pub closure: LuaVal,
-    pub top: usize,
+    pub start: usize,
 }
 
 /// Represents a `LuaBytecode` interpreter.
@@ -104,7 +104,7 @@ impl Vm {
             LuaVal::from(func)
         };
         let mut stack_frames = Vec::with_capacity(255);
-        stack_frames.push(StackFrame { closure, top: 0 });
+        stack_frames.push(StackFrame { closure, start: 0 });
         Vm {
             bytecode,
             registers,

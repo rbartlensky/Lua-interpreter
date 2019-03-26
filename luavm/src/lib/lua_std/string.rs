@@ -20,7 +20,7 @@ pub fn get_string_module() -> (String, LuaVal) {
 }
 
 pub fn lua_format(vm: &mut Vm) -> Result<(), LuaError> {
-    let args_start = vm.stack_frames.last().unwrap().top;
+    let args_start = vm.stack_frames.last().unwrap().start;
     let args_count = vm.top - args_start;
     if args_count < 1 {
         Err(LuaError::Error(
