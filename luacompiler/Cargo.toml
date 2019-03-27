@@ -28,3 +28,6 @@ default-features = false
 cfgrammar = "0.2"
 lrlex = "0.2"
 lrpar = "0.2"
+
+[dev-dependencies]
+walkdir = "2"

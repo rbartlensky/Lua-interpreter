@@ -1,4 +1,5 @@
 extern crate luacompiler;
+extern crate walkdir;
 
 use luacompiler::{
     bytecode::instructions::{make_instr, Opcode},
@@ -6,6 +7,10 @@ use luacompiler::{
     irgen::compile_to_ir,
     LuaParseTree,
 };
+use std::fs::File;
+use std::io::Read;
+use std::ops::Add;
+use walkdir::WalkDir;
 
 #[test]
 fn ldi_generation() {
@@ -118,4 +123,31 @@ fn fdiv_generation() {
 #[test]
 fn exp_generation() {
     assert_bytecode(Opcode::EXP, "^");
+}
+
+const LUAVM_TEST_DIR: &'static str = "../luavm/tests/lua_sources/";
+const LUACOMP_OUT_DIR: &'static str = "./tests/bc_out/";
+
+#[test]
+fn bytecode_output() {
+    for entry in WalkDir::new(LUACOMP_OUT_DIR)
+        .into_iter()
+        .filter(|e| match e {
+            Ok(f) => !f.file_type().is_dir(),
+            _ => false,
+        })
+    {
+        let entry = entry.unwrap();
+        let file = String::from(LUAVM_TEST_DIR)
+            .add(entry.file_name().to_str().unwrap())
+            .add(".lua");
+        let pt = LuaParseTree::new(&file).unwrap();
+        let bc = compile_to_bytecode(compile_to_ir(&pt));
+        let mut contents = String::new();
+        File::open(entry.path())
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
+        assert_eq!(format!("{}", bc), contents);
+    }
 }
