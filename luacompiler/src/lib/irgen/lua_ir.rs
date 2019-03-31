@@ -72,13 +72,13 @@ mod tests {
         func.create_block();
         func.create_block();
         func.get_mut_block(0).mut_instrs().push(Instr::ThreeArg(
-            MOV,
+            Mov,
             Arg::Reg(1),
             Arg::Reg(2),
             Arg::Reg(5),
         ));
         func.get_mut_block(0).mut_instrs().push(Instr::ThreeArg(
-            MOV,
+            Mov,
             Arg::Reg(3),
             Arg::Reg(2),
             Arg::Reg(3),
@@ -94,8 +94,8 @@ mod tests {
         ir.substitute_phis();
         let expected = vec![
             vec![
-                Instr::ThreeArg(MOV, Arg::Reg(4), Arg::Reg(4), Arg::Reg(6)),
-                Instr::ThreeArg(MOV, Arg::Reg(3), Arg::Reg(4), Arg::Reg(3)),
+                Instr::ThreeArg(Mov, Arg::Reg(4), Arg::Reg(4), Arg::Reg(6)),
+                Instr::ThreeArg(Mov, Arg::Reg(3), Arg::Reg(4), Arg::Reg(3)),
             ],
             vec![Instr::NArg(Phi, vec![])],
             vec![Instr::NArg(Phi, vec![])],

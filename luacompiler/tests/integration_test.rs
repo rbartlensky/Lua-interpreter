@@ -19,8 +19,8 @@ fn ldi_generation() {
     assert_eq!(bc.get_int(0), 1);
     assert_eq!(bc.get_string(0), "x");
     let expected_instrs = vec![
-        make_instr(Opcode::LDI, 0, 0, 0),
-        make_instr(Opcode::LDS, 1, 0, 0),
+        make_instr(Opcode::Ldi, 0, 0, 0),
+        make_instr(Opcode::Lds, 1, 0, 0),
         make_instr(Opcode::SetUpAttr, 0, 1, 0),
     ];
     let function = bc.get_function(bc.get_main_function());
@@ -38,8 +38,8 @@ fn ldf_generation() {
     assert_eq!(bc.get_float(0).to_string(), "2");
     assert_eq!(bc.get_string(0), "x");
     let expected_instrs = vec![
-        make_instr(Opcode::LDF, 0, 0, 0),
-        make_instr(Opcode::LDS, 1, 0, 0),
+        make_instr(Opcode::Ldf, 0, 0, 0),
+        make_instr(Opcode::Lds, 1, 0, 0),
         make_instr(Opcode::SetUpAttr, 0, 1, 0),
     ];
     let function = bc.get_function(bc.get_main_function());
@@ -57,8 +57,8 @@ fn lds_generation() {
     assert_eq!(bc.get_string(0), "1.2");
     assert_eq!(bc.get_string(1), "x");
     let expected_instrs = vec![
-        make_instr(Opcode::LDS, 0, 0, 0),
-        make_instr(Opcode::LDS, 1, 1, 0),
+        make_instr(Opcode::Lds, 0, 0, 0),
+        make_instr(Opcode::Lds, 1, 1, 0),
         make_instr(Opcode::SetUpAttr, 0, 1, 0),
     ];
     let function = bc.get_function(bc.get_main_function());
@@ -76,10 +76,10 @@ fn assert_bytecode(opcode: Opcode, operation: &str) {
     assert_eq!(bc.get_int(1), 2);
     assert_eq!(bc.get_string(0), "x");
     let expected_instrs = vec![
-        make_instr(Opcode::LDI, 0, 0, 0),
-        make_instr(Opcode::LDI, 1, 1, 0),
+        make_instr(Opcode::Ldi, 0, 0, 0),
+        make_instr(Opcode::Ldi, 1, 1, 0),
         make_instr(opcode, 2, 0, 1),
-        make_instr(Opcode::LDS, 3, 0, 0),
+        make_instr(Opcode::Lds, 3, 0, 0),
         make_instr(Opcode::SetUpAttr, 0, 3, 2),
     ];
     let function = bc.get_function(bc.get_main_function());
@@ -92,37 +92,37 @@ fn assert_bytecode(opcode: Opcode, operation: &str) {
 
 #[test]
 fn add_generation() {
-    assert_bytecode(Opcode::ADD, "+");
+    assert_bytecode(Opcode::Add, "+");
 }
 
 #[test]
 fn sub_generation() {
-    assert_bytecode(Opcode::SUB, "-");
+    assert_bytecode(Opcode::Sub, "-");
 }
 
 #[test]
 fn mul_generation() {
-    assert_bytecode(Opcode::MUL, "*");
+    assert_bytecode(Opcode::Mul, "*");
 }
 
 #[test]
 fn div_generation() {
-    assert_bytecode(Opcode::DIV, "/");
+    assert_bytecode(Opcode::Div, "/");
 }
 
 #[test]
 fn mod_generation() {
-    assert_bytecode(Opcode::MOD, "%");
+    assert_bytecode(Opcode::Mod, "%");
 }
 
 #[test]
 fn fdiv_generation() {
-    assert_bytecode(Opcode::FDIV, "//");
+    assert_bytecode(Opcode::FDiv, "//");
 }
 
 #[test]
 fn exp_generation() {
-    assert_bytecode(Opcode::EXP, "^");
+    assert_bytecode(Opcode::Exp, "^");
 }
 
 const LUAVM_TEST_DIR: &'static str = "../luavm/tests/lua_sources/";

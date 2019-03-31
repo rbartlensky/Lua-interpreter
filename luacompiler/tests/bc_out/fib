@@ -48,14 +48,14 @@ Function 0 {
 Function 1 {
   Ldi 1 0 0
   Eq 2 0 1
-  JmpNE 2 4 0
+  JmpNe 2 4 0
   Ldi 3 0 0
   Push 3 0 1
   Ret 0 0 0
   Jmp 0 27 0
   Ldi 4 1 0
   Eq 5 0 4
-  JmpNE 5 4 0
+  JmpNe 5 4 0
   Ldi 6 1 0
   Push 6 0 1
   Ret 0 0 0

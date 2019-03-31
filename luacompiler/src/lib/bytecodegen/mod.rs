@@ -56,8 +56,8 @@ impl<'a> LuaIRToLuaBc<'a> {
         }
         for (instr, bb) in &self.branches {
             if opcode(instrs[*instr]) == Opcode::Jmp as u8
-                || opcode(instrs[*instr]) == Opcode::JmpEQ as u8
-                || opcode(instrs[*instr]) == Opcode::JmpNE as u8
+                || opcode(instrs[*instr]) == Opcode::JmpEq as u8
+                || opcode(instrs[*instr]) == Opcode::JmpNe as u8
             {
                 let jmp: i16 = self.blocks[&bb] as i16 - *instr as i16 - 1;
                 set_extended_arg(&mut instrs[*instr], jmp);
@@ -99,22 +99,22 @@ impl<'a> LuaIRToLuaBc<'a> {
         let instr = self.ir.functions[f].get_block(bb).get(i);
         let opcode = instr.opcode();
         match opcode {
-            MOV => {
+            Mov => {
                 if let Instr::TwoArg(_, ref arg1, ref arg2) = instr {
                     let (opcode, arg2) = match *arg2 {
-                        Arg::Reg(reg) => (Opcode::MOV, reg),
-                        Arg::Int(i) => (Opcode::LDI, self.const_map.get_int(i)),
-                        Arg::Float(f) => (Opcode::LDF, self.const_map.get_float(f.to_string())),
-                        Arg::Str(ref s) => (Opcode::LDS, self.const_map.get_str(s.clone())),
-                        Arg::Nil => (Opcode::LDN, 0),
-                        Arg::Table => (Opcode::LDT, 0),
-                        Arg::Bool(b) => (Opcode::LDB, b as usize),
+                        Arg::Reg(reg) => (Opcode::Mov, reg),
+                        Arg::Int(i) => (Opcode::Ldi, self.const_map.get_int(i)),
+                        Arg::Float(f) => (Opcode::Ldf, self.const_map.get_float(f.to_string())),
+                        Arg::Str(ref s) => (Opcode::Lds, self.const_map.get_str(s.clone())),
+                        Arg::Nil => (Opcode::Ldn, 0),
+                        Arg::Table => (Opcode::Ldt, 0),
+                        Arg::Bool(b) => (Opcode::Ldb, b as usize),
                         _ => panic!("Mov shouldn't have {:?} as an argument.", arg2),
                     };
                     instrs.push(make_instr(opcode, arg1.get_reg() as u8, arg2 as u8, 0))
                 }
             }
-            ADD | SUB | MUL | DIV | MOD | FDIV | EXP | EQ | LT | GT | LE | GE | NE => {
+            Add | Sub | Mul | Div | Mod | FDiv | Exp | Eq | Lt | Gt | Le | Ge | Ne => {
                 if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
                     instrs.push(make_instr(
                         opcode.to_opcode(),
@@ -124,7 +124,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                     ))
                 }
             }
-            CLOSURE => {
+            Closure => {
                 if let Instr::TwoArg(_, arg1, arg2) = instr {
                     instrs.push(make_instr(
                         opcode.to_opcode(),
@@ -134,12 +134,12 @@ impl<'a> LuaIRToLuaBc<'a> {
                     ))
                 }
             }
-            CALL | SetTop => {
+            Call | SetTop => {
                 if let Instr::OneArg(_, arg1) = instr {
                     instrs.push(make_instr(opcode.to_opcode(), arg1.get_reg() as u8, 0, 0))
                 }
             }
-            PUSH => instrs.push(if let Instr::OneArg(_, arg1) = instr {
+            Push => instrs.push(if let Instr::OneArg(_, arg1) = instr {
                 make_instr(opcode.to_opcode(), arg1.get_reg() as u8, 0, 0)
             } else if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
                 make_instr(
@@ -151,7 +151,7 @@ impl<'a> LuaIRToLuaBc<'a> {
             } else {
                 panic!("Not enough arguments for {:?}!", opcode)
             }),
-            VarArg | MOVR => instrs.push(if let Instr::TwoArg(_, arg1, arg2) = instr {
+            VarArg | MovR => instrs.push(if let Instr::TwoArg(_, arg1, arg2) = instr {
                 make_instr(
                     opcode.to_opcode(),
                     arg1.get_reg() as u8,
@@ -163,12 +163,12 @@ impl<'a> LuaIRToLuaBc<'a> {
             } else {
                 panic!("Not enough arguments for {:?}!", opcode)
             }),
-            RET => instrs.push(make_instr(opcode.to_opcode(), 0, 0, 0)),
+            Ret => instrs.push(make_instr(opcode.to_opcode(), 0, 0, 0)),
             GetUpAttr => {
                 if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
                     let reg = arg1.get_reg() as u8;
                     instrs.push(make_instr(
-                        Opcode::LDS,
+                        Opcode::Lds,
                         reg,
                         self.const_map.get_str(arg3.get_str()) as u8,
                         0,
@@ -185,7 +185,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                 if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
                     let reg = arg3.get_reg() as u8;
                     instrs.push(make_instr(
-                        Opcode::LDS,
+                        Opcode::Lds,
                         last_reg,
                         self.const_map.get_str(arg2.get_str()) as u8,
                         0,
@@ -207,7 +207,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                     panic!("Not enough arguments for {:?}!", opcode)
                 })
             }
-            JmpNE => {
+            JmpNe => {
                 let len = instrs.len();
                 instrs.push(if let Instr::ThreeArg(_, arg1, _, arg3) = instr {
                     self.branches.push((len, arg3.get_block()));
@@ -216,7 +216,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                     panic!("Not enough arguments for {:?}!", opcode)
                 })
             }
-            JmpEQ => {
+            JmpEq => {
                 let len = instrs.len();
                 instrs.push(if let Instr::ThreeArg(_, arg1, arg2, _) = instr {
                     self.branches.push((len, arg2.get_block()));
@@ -261,7 +261,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                     panic!("SetUpVal should be a Instr::TwoArg instruction!")
                 }
             }
-            UMN => {
+            Umn => {
                 if let Instr::TwoArg(_, arg1, arg2) = instr {
                     instrs.push(make_instr(
                         opcode.to_opcode(),
@@ -270,7 +270,7 @@ impl<'a> LuaIRToLuaBc<'a> {
                         0,
                     ))
                 } else {
-                    panic!("UMN should be a Instr::TwoArg instruction!")
+                    panic!("Umn should be a Instr::TwoArg instruction!")
                 }
             }
             // ignore phis as we have already processed them

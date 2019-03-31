@@ -64,13 +64,13 @@ Function 1 {
   Ldi 2 1 0
   Ldi 3 0 0
   Eq 4 0 3
-  JmpNE 4 3 0
+  JmpNe 4 3 0
   Push 1 0 1
   Ret 0 0 0
   Jmp 0 20 0
   Ldi 5 1 0
   Eq 6 0 5
-  JmpNE 6 3 0
+  JmpNe 6 3 0
   Push 2 0 1
   Ret 0 0 0
   Jmp 0 14 0
@@ -78,8 +78,8 @@ Function 1 {
   Ldi 8 0 0
   Jmp 0 1 0
   Jmp 0 10 0
-  LT 9 7 0
-  JmpNE 9 6 0
+  Lt 9 7 0
+  JmpNe 9 6 0
   Add 8 1 2
   Mov 1 2 0
   Mov 2 8 0

@@ -84,13 +84,13 @@ pub fn format_instr(instr: u32) -> String {
         21 => "GetUpAttr",
         22 => "SetUpAttr",
         23 => "Jmp",
-        24 => "JmpNE",
-        25 => "LT",
-        26 => "GT",
-        27 => "LE",
-        28 => "GE",
-        29 => "NE",
-        30 => "JmpEQ",
+        24 => "JmpNe",
+        25 => "Lt",
+        26 => "Gt",
+        27 => "Le",
+        28 => "Ge",
+        29 => "Ne",
+        30 => "JmpEq",
         31 => "GetUpval",
         32 => "SetUpval",
         33 => "Ldn",
@@ -110,55 +110,55 @@ pub fn format_instr(instr: u32) -> String {
 
 /// Represents the supported operations of the bytecode.
 /// Each operation can have at most 3 arguments.
-/// There are 256 available registers, and load operations (LDI, LDF, LDS) can only
+/// There are 256 available registers, and load operations (Ldi, Ldf, Lds) can only
 /// refer to at most 256 constants.
 /// Arg(i) represents the i-th argument; Reg(i) == The Arg(i)-th register
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Opcode {
-    MOV = 0,      // R(1) = R(2)
-    LDI = 1,      // R(1) = I(1); load integer from the constant table
-    LDF = 2,      // R(1) = F(1); load float from the constant table
-    LDS = 3,      // R(1) = S(1); load string from the constant table
-    ADD = 4,      // R(1) = R(2) + R(3)
-    SUB = 5,      // R(1) = R(2) - R(3)
-    MUL = 6,      // R(1) = R(2) * R(3)
-    DIV = 7,      // R(1) = R(2) / R(3)
-    MOD = 8,      // R(1) = R(2) % R(3)
-    FDIV = 9,     // R(1) = R(2) // R(3)
-    EXP = 10,     // R(1) = R(2) ^ R(3)
+    Mov = 0,      // R(1) = R(2)
+    Ldi = 1,      // R(1) = I(1); load integer from the constant table
+    Ldf = 2,      // R(1) = F(1); load float from the constant table
+    Lds = 3,      // R(1) = S(1); load string from the constant table
+    Add = 4,      // R(1) = R(2) + R(3)
+    Sub = 5,      // R(1) = R(2) - R(3)
+    Mul = 6,      // R(1) = R(2) * R(3)
+    Div = 7,      // R(1) = R(2) / R(3)
+    Mod = 8,      // R(1) = R(2) % R(3)
+    FDiv = 9,     // R(1) = R(2) // R(3)
+    Exp = 10,     // R(1) = R(2) ^ R(3)
     GetAttr = 11, // R(1) = R(2)[R(3)]
     SetAttr = 12, // R(1)[R(2)] = R(3)
-    CLOSURE = 13, // R(1) = Closure(R(2))
-    CALL = 14,    // call R(1) with Arg(2) arguments
+    Closure = 13, // R(1) = Closure(R(2))
+    Call = 14,    // call R(1) with Arg(2) arguments
     // Push R(1) to the stack; If Arg(3) is set to some value, then it is added
     // to the number of return values of a function
-    PUSH = 15,
+    Push = 15,
     // Copy Arg(2) varargs into registers starting from R(1);
     // If Arg(3) is set to 1, then all varargs are pushed to the stack
     // If Arg(3) is set to 2, then the vm will do the same thing as before,
     // but also increase the count of the return values of a function
     VarArg = 16,
-    EQ = 17, // R(1) == R(2)
+    Eq = 17, // R(1) == R(2)
     // Copy return value RV(2) into R(1); Arg(3) = 1 or 2 => same reasoning as above
-    MOVR = 18,
-    RET = 19,       // return to the parent frame
+    MovR = 18,
+    Ret = 19,       // return to the parent frame
     SetTop = 20,    // set R(1)'s `args_start` to the top of the stack
     GetUpAttr = 21, // R(1) = Upvals[Arg(2)][Arg(3)]
     SetUpAttr = 22, // Upvals[Arg(1)][Arg(2)] = R(3)
     Jmp = 23,
-    JmpNE = 24,
-    LT = 25, // R(1) = R(2) < R(3)
-    GT = 26, // R(1) = R(2) > R(3)
-    LE = 27, // R(1) = R(2) <= R(3)
-    GE = 28, // R(1) = R(2) >= R(3)
-    NE = 29, // R(1) = R(2) != R(3)
-    JmpEQ = 30,
+    JmpNe = 24,
+    Lt = 25, // R(1) = R(2) < R(3)
+    Gt = 26, // R(1) = R(2) > R(3)
+    Le = 27, // R(1) = R(2) <= R(3)
+    Ge = 28, // R(1) = R(2) >= R(3)
+    Ne = 29, // R(1) = R(2) != R(3)
+    JmpEq = 30,
     GetUpVal = 31, // R(1) = UpVals[Arg(2)]
     SetUpVal = 32, // UpVals[Arg(1)] = R(2)
-    LDN = 33,      // R(1) = Nil
-    LDT = 34,      // R(1) = {}
-    UMN = 35,      // R(1) = -R(2)
-    LDB = 36,      // R(1) = true/false
+    Ldn = 33,      // R(1) = Nil
+    Ldt = 34,      // R(1) = {}
+    Umn = 35,      // R(1) = -R(2)
+    Ldb = 36,      // R(1) = true/false
 }
 
 #[cfg(test)]
@@ -170,8 +170,8 @@ mod tests {
         for i in 0..=255 {
             for j in 0..=255 {
                 for k in 0..=255 {
-                    let instr = make_instr(Opcode::MOV, i, j, k);
-                    assert_eq!(opcode(instr), Opcode::MOV as u8);
+                    let instr = make_instr(Opcode::Mov, i, j, k);
+                    assert_eq!(opcode(instr), Opcode::Mov as u8);
                     assert_eq!(first_arg(instr), i);
                     assert_eq!(second_arg(instr), j);
                     assert_eq!(third_arg(instr), k);

@@ -3,27 +3,27 @@ Function 0 {
   Ldi 1 1 0
   Ldi 2 0 0
   Ldi 3 2 0
-  GE 10 2 3
-  JmpNE 10 1 0
-  LE 10 0 1
+  Ge 10 2 3
+  JmpNe 10 1 0
+  Le 10 0 1
   JmpEQ 10 3 0
-  LT 10 2 3
-  JmpNE 10 1 0
-  GE 10 0 1
-  JmpNE 10 19 0
+  Lt 10 2 3
+  JmpNe 10 1 0
+  Ge 10 0 1
+  JmpNe 10 19 0
   Ldi 12 2 0
   Ldi 13 1 0
   Ldi 14 3 0
   Ldi 15 0 0
   Ldi 16 2 0
-  GE 23 15 16
-  JmpNE 23 1 0
-  LE 23 13 14
+  Ge 23 15 16
+  JmpNe 23 1 0
+  Le 23 13 14
   JmpEQ 23 3 0
-  LT 23 15 16
-  JmpNE 23 1 0
-  GE 23 13 14
-  JmpNE 23 4 0
+  Lt 23 15 16
+  JmpNe 23 1 0
+  Ge 23 13 14
+  JmpNe 23 4 0
   Ldi 25 0 0
   Add 12 12 25
   Add 13 13 15

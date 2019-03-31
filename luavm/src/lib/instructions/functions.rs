@@ -52,8 +52,8 @@ pub fn set_top(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     Ok(())
 }
 
-const MOVR_0_0_1: u32 = make_instr(Opcode::MOVR, 0, 0, 1);
-const MOVR_0_0_2: u32 = make_instr(Opcode::MOVR, 0, 0, 2);
+const MOVR_0_0_1: u32 = make_instr(Opcode::MovR, 0, 0, 1);
+const MOVR_0_0_2: u32 = make_instr(Opcode::MovR, 0, 0, 2);
 
 pub fn call(vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
     // The frame of a function has the following structure:
@@ -117,11 +117,11 @@ pub fn call(vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
     vm.curr_frame = old_curr_frame;
     vm.pc = old_pc;
     // if we returned values, then the next few instructions might move these into
-    // registers using the MOVR instruction
+    // registers using the MovR instruction
     let len = vm.bytecode.get_function(caller_index).instrs_len();
     if vm.pc + 1 < len {
         let mut instr = vm.bytecode.get_function(caller_index).get_instr(vm.pc + 1);
-        // special MOVR cases, see luacompiler/bytecode/instructions.rs
+        // special MovR cases, see luacompiler/bytecode/instructions.rs
         // 001 is used to push all return values to the stack as arguments to another call
         // 002 is used to push all return values to the stack as return values
         if instr == MOVR_0_0_1 || instr == MOVR_0_0_2 {
@@ -139,7 +139,7 @@ pub fn call(vm: &mut Vm, _instr: u32) -> Result<(), LuaError> {
                 vm.closure().inc_ret_vals(ret_vals)?;
             }
         } else {
-            while opcode(instr) == Opcode::MOVR as u8 {
+            while opcode(instr) == Opcode::MovR as u8 {
                 let from = second_arg(instr) as usize;
                 // if we don't have enough return values to unpack, we return nils
                 vm.registers[first_arg(instr) as usize] = if from < ret_vals {
