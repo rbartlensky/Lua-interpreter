@@ -1,4 +1,4 @@
-Function 0 {
+BcFunc 0 {
   Ldi 0 0 0
   Ldi 1 1 0
   Ldi 2 0 0

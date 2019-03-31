@@ -1,16 +1,16 @@
 use crate::{
     errors::LuaError,
     lua_values::{gc_val::GcVal, LuaVal},
-    stdlib::StdFunction,
+    stdlib::StdBcFunc,
     Vm,
 };
 use gc::GcCell;
-use luacompiler::bytecode::Function;
+use luacompiler::bytecode::BcFunc;
 use std::cell::Cell;
 
 /// Represents a closure in Lua.
 #[derive(Trace, Finalize)]
-pub struct UserFunction {
+pub struct UserBcFunc {
     index: usize,
     reg_count: usize,
     param_count: usize,
@@ -19,9 +19,9 @@ pub struct UserFunction {
     upvals: GcCell<Vec<LuaVal>>,
 }
 
-impl UserFunction {
-    pub fn new(index: usize, reg_count: usize, param_count: usize) -> UserFunction {
-        UserFunction {
+impl UserBcFunc {
+    pub fn new(index: usize, reg_count: usize, param_count: usize) -> UserBcFunc {
+        UserBcFunc {
             index,
             reg_count,
             param_count,
@@ -35,8 +35,8 @@ impl UserFunction {
         reg_count: usize,
         param_count: usize,
         upvals: Vec<LuaVal>,
-    ) -> UserFunction {
-        UserFunction {
+    ) -> UserBcFunc {
+        UserBcFunc {
             index,
             reg_count,
             param_count,
@@ -46,7 +46,7 @@ impl UserFunction {
     }
 }
 
-impl GcVal for UserFunction {
+impl GcVal for UserBcFunc {
     fn is_closure(&self) -> bool {
         true
     }
@@ -104,14 +104,14 @@ impl GcVal for UserFunction {
 }
 
 #[derive(Trace, Finalize)]
-pub struct BuiltinFunction {
+pub struct BuiltinBcFunc {
     #[unsafe_ignore_trace]
     handler: fn(&mut Vm) -> Result<(), LuaError>,
     #[unsafe_ignore_trace]
     ret_vals: Cell<usize>,
 }
 
-impl GcVal for BuiltinFunction {
+impl GcVal for BuiltinBcFunc {
     fn is_closure(&self) -> bool {
         true
     }
@@ -148,36 +148,36 @@ impl GcVal for BuiltinFunction {
 
     fn set_upvals(&self, _upvals: Vec<LuaVal>) -> Result<(), LuaError> {
         Err(LuaError::Error(
-            "SetUpvals doesn't work on BuiltinFunctions.".to_string(),
+            "SetUpvals doesn't work on BuiltinBcFuncs.".to_string(),
         ))
     }
 
     fn get_upval(&self, _: usize) -> Result<LuaVal, LuaError> {
         Err(LuaError::Error(
-            "GetUpVal doesn't work on BuiltinFunctions.".to_string(),
+            "GetUpVal doesn't work on BuiltinBcFuncs.".to_string(),
         ))
     }
 
     fn set_upval(&self, _: usize, _: LuaVal) -> Result<(), LuaError> {
         Err(LuaError::Error(
-            "SetUpVal doesn't work on BuiltinFunctions.".to_string(),
+            "SetUpVal doesn't work on BuiltinBcFuncs.".to_string(),
         ))
     }
 }
 
-pub fn from_stdfunction(func: &StdFunction) -> Box<dyn GcVal> {
-    Box::new(BuiltinFunction {
+pub fn from_stdfunction(func: &StdBcFunc) -> Box<dyn GcVal> {
+    Box::new(BuiltinBcFunc {
         handler: func.handler(),
         ret_vals: Cell::new(0),
     })
 }
 
-pub fn from_function(func: &Function) -> Box<dyn GcVal> {
+pub fn from_function(func: &BcFunc) -> Box<dyn GcVal> {
     let mut upvals = Vec::with_capacity(func.upvals_count());
     for _ in 0..func.upvals_count() {
         upvals.push(LuaVal::new());
     }
-    Box::new(UserFunction {
+    Box::new(UserBcFunc {
         index: func.index(),
         reg_count: func.reg_count(),
         param_count: func.param_count(),

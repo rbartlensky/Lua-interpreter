@@ -1,7 +1,7 @@
 pub mod constants_map;
 
 use self::constants_map::ConstantsMap;
-use bytecode::{instructions::*, BCProviderType, Function, LuaBytecode};
+use bytecode::{instructions::*, BCProviderType, BcFunc, LuaBytecode};
 use irgen::instr::{Arg, Instr};
 use irgen::lua_ir::LuaIR;
 use irgen::opcodes::IROpcode::*;
@@ -16,20 +16,20 @@ pub fn fit_in_u8(v: usize) -> u8 {
 }
 
 pub fn compile_to_bytecode(ir: LuaIR) -> LuaBytecode {
-    LuaIRToLuaBc::new(ir).compile()
+    BcGen::new(ir).compile()
 }
 
-struct LuaIRToLuaBc<'a> {
+struct BcGen<'a> {
     ir: LuaIR<'a>,
     const_map: ConstantsMap,
     branches: Vec<(usize, usize)>,
     blocks: HashMap<usize, usize>,
 }
 
-impl<'a> LuaIRToLuaBc<'a> {
+impl<'a> BcGen<'a> {
     /// Compile the given LuaIR to LuaBytecode.
-    fn new(ir: LuaIR<'a>) -> LuaIRToLuaBc<'a> {
-        LuaIRToLuaBc {
+    fn new(ir: LuaIR<'a>) -> BcGen<'a> {
+        BcGen {
             ir,
             const_map: ConstantsMap::new(),
             branches: vec![],
@@ -47,7 +47,7 @@ impl<'a> LuaIRToLuaBc<'a> {
         LuaBytecode::new(functions, self.ir.main_func, self.const_map)
     }
 
-    fn compile_function(&mut self, i: usize) -> Function {
+    fn compile_function(&mut self, i: usize) -> BcFunc {
         let reg_count = self.ir.functions[i].reg_count();
         let mut instrs = Vec::with_capacity(reg_count);
         for bb in 0..self.ir.functions[i].blocks().len() {
@@ -78,7 +78,7 @@ impl<'a> LuaIRToLuaBc<'a> {
             })
             .collect();
         let func = &self.ir.functions[i];
-        Function::new(
+        BcFunc::new(
             i,
             func.reg_count() + 1,
             func.param_count(),

@@ -41,7 +41,7 @@ impl From<&ProviderType> for BCProviderType {
 
 /// Represents a function in Lua.
 #[derive(Serialize, Deserialize)]
-pub struct Function {
+pub struct BcFunc {
     index: usize,
     reg_count: usize,
     param_count: usize,
@@ -50,7 +50,7 @@ pub struct Function {
     instrs: Vec<u32>,
 }
 
-impl Function {
+impl BcFunc {
     pub fn new(
         index: usize,
         reg_count: usize,
@@ -58,8 +58,8 @@ impl Function {
         upvals_count: usize,
         provides: HashMap<u8, Vec<(BCProviderType, u8)>>,
         instrs: Vec<u32>,
-    ) -> Function {
-        Function {
+    ) -> BcFunc {
+        BcFunc {
             index,
             reg_count,
             param_count,
@@ -70,8 +70,8 @@ impl Function {
     }
 
     /// Create a function which holds the given instructions.
-    pub fn from_u32_instrs(instrs: Vec<u32>) -> Function {
-        Function {
+    pub fn from_u32_instrs(instrs: Vec<u32>) -> BcFunc {
+        BcFunc {
             index: 0,
             reg_count: 0,
             param_count: 0,
@@ -117,7 +117,7 @@ pub struct LuaBytecode {
     ints: Vec<i64>,
     floats: Vec<f64>,
     strings: Vec<String>,
-    functions: Vec<Function>,
+    functions: Vec<BcFunc>,
     main_function: usize,
 }
 
@@ -126,7 +126,7 @@ impl LuaBytecode {
     /// * `main_function` - the id of the main function
     /// * `const_map` - a mapping between constants and their index in the constant table
     pub fn new(
-        functions: Vec<Function>,
+        functions: Vec<BcFunc>,
         main_function: usize,
         const_map: ConstantsMap,
     ) -> LuaBytecode {
@@ -147,7 +147,7 @@ impl LuaBytecode {
         deserialize(&bytes[..]).unwrap()
     }
 
-    pub fn get_function(&self, i: usize) -> &Function {
+    pub fn get_function(&self, i: usize) -> &BcFunc {
         &self.functions[i]
     }
 
@@ -190,7 +190,7 @@ impl LuaBytecode {
 impl fmt::Display for LuaBytecode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for (i, function) in self.functions.iter().enumerate() {
-            write!(f, "Function {} {{\n", i)?;
+            write!(f, "BcFunc {} {{\n", i)?;
             for instr in &function.instrs {
                 write!(f, "  {}\n", format_instr(*instr))?;
             }
@@ -217,7 +217,7 @@ mod tests {
         for i in vec!["2.0"] {
             const_map.get_float(i.to_string());
         }
-        let function = Function::from_u32_instrs(instrs);
+        let function = BcFunc::from_u32_instrs(instrs);
         LuaBytecode::new(vec![function], 0, const_map)
     }
 

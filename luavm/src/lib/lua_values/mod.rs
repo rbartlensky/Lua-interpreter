@@ -6,12 +6,12 @@ mod tagging;
 
 use self::gc_val::GcVal;
 use self::{lua_closure::*, lua_obj::*, tagging::*};
-use crate::stdlib::StdFunction;
+use crate::stdlib::StdBcFunc;
 use errors::LuaError;
 use gc::finalizer_safe;
 use gc::{gc::GcBox, Finalize, Trace};
 use ieee754::Ieee754;
-use luacompiler::bytecode::Function;
+use luacompiler::bytecode::BcFunc;
 use std::cell::Cell;
 use std::{
     cmp::Ordering,
@@ -455,9 +455,9 @@ impl From<String> for LuaVal {
     }
 }
 
-impl From<&StdFunction> for LuaVal {
+impl From<&StdBcFunc> for LuaVal {
     /// Create a gc-able closure LuaVal
-    fn from(func: &StdFunction) -> Self {
+    fn from(func: &StdBcFunc) -> Self {
         let lua_closure = from_stdfunction(func);
         unsafe {
             let ptr = GcBox::new(lua_closure);
@@ -470,9 +470,9 @@ impl From<&StdFunction> for LuaVal {
     }
 }
 
-impl From<&Function> for LuaVal {
+impl From<&BcFunc> for LuaVal {
     /// Create a gc-able closure LuaVal
-    fn from(func: &Function) -> Self {
+    fn from(func: &BcFunc) -> Self {
         let lua_closure = from_function(func);
         unsafe {
             let ptr = GcBox::new(lua_closure);
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn closure_type() {
-        let mut main = LuaVal::from(UserFunction::new(0, 0, 0));
+        let mut main = LuaVal::from(UserBcFunc::new(0, 0, 0));
         assert!(main.kind() == LuaValKind::Gc || main.kind() == LuaValKind::GcRoot);
         assert_eq!(main.is_aop_float(), false);
         assert_eq!(main.to_int().unwrap_err(), LuaError::IntConversionErr);
@@ -741,7 +741,7 @@ mod tests {
             LuaVal::from(3.0),
             LuaVal::from(UserTable::new(HashMap::new())),
             LuaVal::from(String::from("3.0")),
-            LuaVal::from(UserFunction::new(0, 0, 0)),
+            LuaVal::from(UserBcFunc::new(0, 0, 0)),
             LuaVal::from(false),
         ]
     }
@@ -1132,7 +1132,7 @@ mod tests {
             LuaVal::from(1.0),
             LuaVal::from(String::from("1.0")),
             LuaVal::from(UserTable::new(HashMap::new())),
-            LuaVal::from(UserFunction::new(0, 0, 0)),
+            LuaVal::from(UserBcFunc::new(0, 0, 0)),
         ]
     }
 

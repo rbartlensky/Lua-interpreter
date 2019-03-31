@@ -4,7 +4,7 @@ pub mod lua_ir;
 pub mod opcodes;
 mod utils;
 
-use self::compiled_func::{BasicBlock, CompiledFunc, ProviderType};
+use self::compiled_func::{BasicBlock, IRFunc, ProviderType};
 use self::instr::{Arg, Instr};
 use self::lua_ir::LuaIR;
 use self::opcodes::IROpcode::*;
@@ -18,7 +18,7 @@ use LuaParseTree;
 
 /// Compile the given parse tree into an SSA IR.
 pub fn compile_to_ir(pt: &LuaParseTree) -> LuaIR {
-    LuaToIR::new(pt).to_lua_ir()
+    IRGen::new(pt).to_lua_ir()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -64,17 +64,17 @@ impl<'a> VarType<'a> {
 }
 
 /// Represents a compiler which translates a given Lua parse tree to an SSA IR.
-struct LuaToIR<'a> {
+struct IRGen<'a> {
     pt: &'a LuaParseTree,
-    functions: Vec<CompiledFunc<'a>>,
+    functions: Vec<IRFunc<'a>>,
     curr_func: usize,
     curr_block: usize,
 }
 
-impl<'a> LuaToIR<'a> {
-    fn new(pt: &'a LuaParseTree) -> LuaToIR<'a> {
-        let functions = vec![CompiledFunc::new(0, false)];
-        LuaToIR {
+impl<'a> IRGen<'a> {
+    fn new(pt: &'a LuaParseTree) -> IRGen<'a> {
+        let functions = vec![IRFunc::new(0, false)];
+        IRGen {
             pt,
             functions,
             curr_func: 0,
@@ -92,7 +92,7 @@ impl<'a> LuaToIR<'a> {
         LuaIR::new(self.functions, 0)
     }
 
-    fn curr_func(&mut self) -> &mut CompiledFunc<'a> {
+    fn curr_func(&mut self) -> &mut IRFunc<'a> {
         &mut self.functions[self.curr_func]
     }
 
@@ -826,13 +826,13 @@ impl<'a> LuaToIR<'a> {
     fn compile_funcbody(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
         let old_curr_func = self.curr_func;
         let old_curr_block = self.curr_block;
-        // create a new `CompiledFunc` for this function
+        // create a new `IRFunc` for this function
         let new_func_id = self.functions.len();
         let param_nodes = get_nodes(&nodes[1], lua5_3_y::R_PARLIST);
         let param_count = param_nodes.len();
         let is_vararg =
             param_count > 0 && is_term(param_nodes.last().unwrap(), lua5_3_l::T_DOTDOTDOT);
-        let mut new_func = CompiledFunc::new(0, is_vararg);
+        let mut new_func = IRFunc::new(0, is_vararg);
         new_func.set_parent_func(self.curr_func);
         new_func.set_parent_block(self.curr_block);
         self.functions.push(new_func);

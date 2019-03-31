@@ -1,4 +1,4 @@
-Function 0 {
+BcFunc 0 {
   Closure 0 1 0
   Lds 25 0 0
   SetUpAttr 0 25 0
@@ -59,7 +59,7 @@ Function 0 {
   Push 24 0 0
   Call 19 0 0
 }
-Function 1 {
+BcFunc 1 {
   Ldi 1 0 0
   Ldi 2 1 0
   Ldi 3 0 0

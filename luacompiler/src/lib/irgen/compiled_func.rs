@@ -168,7 +168,7 @@ pub enum ProviderType {
 }
 
 /// Represents a compiled function in Lua.
-pub struct CompiledFunc<'a> {
+pub struct IRFunc<'a> {
     parent_func: Option<usize>,
     parent_block: Option<usize>,
     upvals: BTreeMap<&'a str, usize>,
@@ -180,10 +180,10 @@ pub struct CompiledFunc<'a> {
     is_vararg: bool,
 }
 
-impl<'a> CompiledFunc<'a> {
+impl<'a> IRFunc<'a> {
     /// Create a new empty function with the given index.
-    pub fn new(param_count: usize, is_vararg: bool) -> CompiledFunc<'a> {
-        CompiledFunc {
+    pub fn new(param_count: usize, is_vararg: bool) -> IRFunc<'a> {
+        IRFunc {
             parent_func: None,
             parent_block: None,
             upvals: BTreeMap::new(),

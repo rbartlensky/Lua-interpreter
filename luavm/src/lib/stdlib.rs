@@ -3,27 +3,27 @@ use super::Vm;
 use lua_values::LuaVal;
 use std::{fmt::Write as FmtWrite, mem::swap};
 
-pub const STDLIB_FUNCS: &'static [StdFunction] = &[
-    StdFunction {
+pub const STDLIB_FUNCS: &'static [StdBcFunc] = &[
+    StdBcFunc {
         name: "assert",
         handler: lua_assert,
     },
-    StdFunction {
+    StdBcFunc {
         name: "print",
         handler: lua_print,
     },
-    StdFunction {
+    StdBcFunc {
         name: "tonumber",
         handler: lua_tonumber,
     },
 ];
 
-pub struct StdFunction {
+pub struct StdBcFunc {
     pub name: &'static str,
     pub handler: fn(&mut Vm) -> Result<(), LuaError>,
 }
 
-impl StdFunction {
+impl StdBcFunc {
     pub fn name(&self) -> &str {
         &self.name
     }

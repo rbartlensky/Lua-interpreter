@@ -1,5 +1,5 @@
 use irgen::{
-    compiled_func::{CompiledFunc, ProviderType},
+    compiled_func::{IRFunc, ProviderType},
     instr::*,
     opcodes::IROpcode::*,
 };
@@ -7,12 +7,12 @@ use std::collections::BTreeMap;
 
 /// Represents an IR in which all instructions are in SSA form.
 pub struct LuaIR<'a> {
-    pub functions: Vec<CompiledFunc<'a>>,
+    pub functions: Vec<IRFunc<'a>>,
     pub main_func: usize,
 }
 
 impl<'a> LuaIR<'a> {
-    pub fn new(functions: Vec<CompiledFunc<'a>>, main_func: usize) -> LuaIR<'a> {
+    pub fn new(functions: Vec<IRFunc<'a>>, main_func: usize) -> LuaIR<'a> {
         LuaIR {
             functions,
             main_func,
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn substitute_phis() {
-        let mut func = CompiledFunc::new(0, false);
+        let mut func = IRFunc::new(0, false);
         func.create_block();
         func.create_block();
         func.create_block();

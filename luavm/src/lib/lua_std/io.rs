@@ -3,12 +3,12 @@ use errors::LuaError;
 use lua_values::{lua_table::UserTable, LuaVal};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
-use stdlib::StdFunction;
+use stdlib::StdBcFunc;
 
 pub fn get_io_module() -> (String, LuaVal) {
     let io = LuaVal::from(UserTable::new(HashMap::new()));
     for func in &[("write", lua_write)] {
-        let std_func = StdFunction {
+        let std_func = StdBcFunc {
             name: func.0,
             handler: func.1,
         };

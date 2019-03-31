@@ -1,5 +1,5 @@
 use errors::LuaError;
-use lua_values::{lua_closure::UserFunction, LuaVal};
+use lua_values::{lua_closure::UserBcFunc, LuaVal};
 use luacompiler::bytecode::instructions::{first_arg, second_arg, *};
 use luacompiler::bytecode::BCProviderType;
 use std::mem::swap;
@@ -16,7 +16,7 @@ pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     for _ in 0..upvals_len {
         upvals.push(LuaVal::new());
     }
-    let ufunc = UserFunction::new(func.index(), func.reg_count(), func.param_count());
+    let ufunc = UserBcFunc::new(func.index(), func.reg_count(), func.param_count());
     vm.registers[first_arg(instr) as usize] = LuaVal::from(ufunc);
     let caller_index = vm.stack_frames[vm.curr_frame].closure.index()?;
     if let Some(provides) = vm

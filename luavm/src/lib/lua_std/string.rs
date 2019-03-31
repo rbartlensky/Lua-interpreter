@@ -2,12 +2,12 @@ use crate::Vm;
 use errors::LuaError;
 use lua_values::{lua_table::UserTable, LuaVal};
 use std::collections::HashMap;
-use stdlib::StdFunction;
+use stdlib::StdBcFunc;
 
 pub fn get_string_module() -> (String, LuaVal) {
     let string = LuaVal::from(UserTable::new(HashMap::new()));
     for func in &[("format", lua_format)] {
-        let std_func = StdFunction {
+        let std_func = StdBcFunc {
             name: func.0,
             handler: func.1,
         };
