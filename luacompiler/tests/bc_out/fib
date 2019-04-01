@@ -50,14 +50,14 @@ BcFunc 1 {
   Eq 2 0 1
   JmpNe 2 4 0
   Ldi 3 0 0
-  Push 3 0 1
+  Push 3 1 0
   Ret 0 0 0
   Jmp 0 27 0
   Ldi 4 1 0
   Eq 5 0 4
   JmpNe 5 4 0
   Ldi 6 1 0
-  Push 6 0 1
+  Push 6 1 0
   Ret 0 0 0
   Jmp 0 20 0
   Lds 7 0 0
@@ -77,7 +77,7 @@ BcFunc 1 {
   Call 11 0 0
   MovR 14 0 0
   Add 15 10 14
-  Push 15 0 1
+  Push 15 1 0
   Ret 0 0 0
   Jmp 0 0 0
 }

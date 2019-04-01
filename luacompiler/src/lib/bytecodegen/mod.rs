@@ -141,12 +141,12 @@ impl<'a> BcGen<'a> {
             }
             Push => instrs.push(if let Instr::OneArg(_, arg1) = instr {
                 make_instr(opcode.to_opcode(), arg1.get_reg() as u8, 0, 0)
-            } else if let Instr::ThreeArg(_, arg1, arg2, arg3) = instr {
+            } else if let Instr::TwoArg(_, arg1, arg2) = instr {
                 make_instr(
                     opcode.to_opcode(),
                     arg1.get_reg() as u8,
                     arg2.get_some() as u8,
-                    arg3.get_some() as u8,
+                    0,
                 )
             } else {
                 panic!("Not enough arguments for {:?}!", opcode)

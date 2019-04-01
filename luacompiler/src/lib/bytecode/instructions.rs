@@ -130,8 +130,8 @@ pub enum Opcode {
     SetAttr = 12, // R(1)[R(2)] = R(3)
     Closure = 13, // R(1) = Closure(R(2))
     Call = 14,    // call R(1) with Arg(2) arguments
-    // Push R(1) to the stack; If Arg(3) is set to some value, then it is added
-    // to the number of return values of a function
+    // Push R(1) to the stack; If Arg(2) is set to some value, then the return values
+    // of the current function is incremented
     Push = 15,
     // Copy Arg(2) varargs into registers starting from R(1);
     // If Arg(3) is set to 1, then all varargs are pushed to the stack

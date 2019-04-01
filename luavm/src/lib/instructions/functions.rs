@@ -1,6 +1,6 @@
 use errors::LuaError;
 use lua_values::{lua_closure::UserBcFunc, LuaVal};
-use luacompiler::bytecode::instructions::{first_arg, second_arg, *};
+use luacompiler::bytecode::instructions::*;
 use luacompiler::bytecode::BCProviderType;
 use std::mem::swap;
 use StackFrame;
@@ -39,7 +39,7 @@ pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
 pub fn push(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
     let val = vm.registers[first_arg(instr) as usize].clone();
     vm.push(val);
-    vm.closure().inc_ret_vals(third_arg(instr) as usize)?;
+    vm.closure().inc_ret_vals(second_arg(instr) as usize)?;
     Ok(())
 }
 

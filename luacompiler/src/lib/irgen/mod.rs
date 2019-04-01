@@ -238,12 +238,8 @@ impl<'a> IRGen<'a> {
                     // push the first n-1 return values to the stack
                     for i in 0..(exprs.len() - 1) {
                         let reg = self.compile_expr(exprs[i]);
-                        self.instrs().push(Instr::ThreeArg(
-                            Push,
-                            Arg::Reg(reg),
-                            Arg::Some(0),
-                            Arg::Some(1),
-                        ));
+                        self.instrs()
+                            .push(Instr::TwoArg(Push, Arg::Reg(reg), Arg::Some(1)));
                     }
                     self.unpack_to_stack(&exprs.last().unwrap(), true);
                     self.instrs().push(Instr::ZeroArg(Ret));
@@ -274,12 +270,8 @@ impl<'a> IRGen<'a> {
             self.curr_func().pop_last_reg();
         } else {
             if increment_ret_vals {
-                self.instrs().push(Instr::ThreeArg(
-                    Push,
-                    Arg::Reg(reg),
-                    Arg::Some(0),
-                    Arg::Some(1),
-                ));
+                self.instrs()
+                    .push(Instr::TwoArg(Push, Arg::Reg(reg), Arg::Some(1)));
             } else {
                 self.instrs().push(Instr::OneArg(Push, Arg::Reg(reg)));
             }
@@ -1988,7 +1980,7 @@ mod tests {
                 Instr::OneArg(Call, Reg(1)),
             ],
             vec![
-                Instr::ThreeArg(Push, Reg(0), Some(0), Some(1)),
+                Instr::TwoArg(Push, Reg(0), Some(1)),
                 Instr::OneArg(VarArg, Some(2)),
                 Instr::ZeroArg(Ret),
             ],
