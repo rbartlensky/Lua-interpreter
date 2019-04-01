@@ -13,6 +13,7 @@ pub enum Arg {
     Bool(bool),
     Block(usize),
     Upval(usize),
+    StackVal(usize),
 }
 
 impl Arg {
@@ -69,6 +70,14 @@ impl Arg {
             *u
         } else {
             panic!("Arg was not an Upval; received {:?}", self)
+        }
+    }
+
+    pub fn get_stackval(&self) -> usize {
+        if let Arg::StackVal(u) = self {
+            *u
+        } else {
+            panic!("Arg was not an StackVal; received {:?}", self)
         }
     }
 }

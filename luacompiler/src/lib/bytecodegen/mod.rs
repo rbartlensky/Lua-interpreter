@@ -155,7 +155,7 @@ impl<'a> BcGen<'a> {
                 make_instr(
                     opcode.to_opcode(),
                     arg1.get_reg() as u8,
-                    arg2.get_some() as u8,
+                    arg2.get_stackval() as u8,
                     0,
                 )
             } else if let Instr::OneArg(_, arg1) = instr {

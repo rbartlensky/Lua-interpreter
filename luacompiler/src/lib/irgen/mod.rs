@@ -506,7 +506,7 @@ impl<'a> IRGen<'a> {
         let opcode = if self.is_vararg(expr) { VarArg } else { MovR };
         for (i, reg) in regs.iter().enumerate() {
             self.instrs()
-                .push(Instr::TwoArg(opcode, Arg::Reg(*reg), Arg::Some(i + 1)));
+                .push(Instr::TwoArg(opcode, Arg::Reg(*reg), Arg::StackVal(i + 1)));
         }
     }
 
@@ -693,7 +693,7 @@ impl<'a> IRGen<'a> {
                 }
                 let reg = self.curr_func().get_new_reg();
                 self.instrs()
-                    .push(Instr::TwoArg(MovR, Arg::Reg(reg), Arg::Some(0)));
+                    .push(Instr::TwoArg(MovR, Arg::Reg(reg), Arg::StackVal(0)));
                 reg
             }
             Nonterm {
@@ -788,8 +788,11 @@ impl<'a> IRGen<'a> {
                     lua5_3_l::T_DOTDOTDOT => {
                         if self.curr_func().is_vararg() {
                             let reg = self.curr_func().get_new_reg();
-                            self.instrs()
-                                .push(Instr::TwoArg(VarArg, Arg::Reg(reg), Arg::Some(0)));
+                            self.instrs().push(Instr::TwoArg(
+                                VarArg,
+                                Arg::Reg(reg),
+                                Arg::StackVal(0),
+                            ));
                             reg
                         } else {
                             panic!("Cannot use '...' outside of a vararg function.")
@@ -1895,8 +1898,8 @@ mod tests {
             ],
             vec![
                 Instr::TwoArg(Mov, Reg(2), Reg(0)),
-                Instr::TwoArg(VarArg, Reg(3), Some(0)),
-                Instr::TwoArg(VarArg, Reg(4), Some(1)),
+                Instr::TwoArg(VarArg, Reg(3), StackVal(0)),
+                Instr::TwoArg(VarArg, Reg(4), StackVal(1)),
                 Instr::ThreeArg(GetUpAttr, Reg(5), Upval(0), Str("f".to_string())),
                 Instr::OneArg(SetTop, Reg(5)),
                 Instr::OneArg(VarArg, Some(1)),
@@ -1938,8 +1941,8 @@ mod tests {
                 Instr::OneArg(Call, Reg(1)),
             ],
             vec![
-                Instr::TwoArg(VarArg, Reg(2), Some(0)),
-                Instr::TwoArg(VarArg, Reg(3), Some(1)),
+                Instr::TwoArg(VarArg, Reg(2), StackVal(0)),
+                Instr::TwoArg(VarArg, Reg(3), StackVal(1)),
                 Instr::ThreeArg(SetUpAttr, Upval(0), Str("x".to_string()), Reg(0)),
                 Instr::ThreeArg(SetUpAttr, Upval(0), Str("y".to_string()), Reg(2)),
                 Instr::ThreeArg(SetUpAttr, Upval(0), Str("z".to_string()), Reg(3)),
