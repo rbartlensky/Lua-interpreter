@@ -8,11 +8,12 @@ use Vm;
 
 // R(1) = Closure(curr_function.child(R(2)).index())
 pub fn closure(vm: &mut Vm, instr: u32) -> Result<(), LuaError> {
-    // Take the index of the function which is the child of the current function
+    // find which function this closure represents
     let func = vm.bytecode.get_function(second_arg(instr) as usize);
     let upvals_len = func.upvals_count();
+    // prepare the upvalues
     let mut upvals = Vec::with_capacity(upvals_len + 1);
-    upvals.push(vm.env.clone());
+    upvals.push(vm.env.clone()); // _ENV is always the first upvalue
     for _ in 0..upvals_len {
         upvals.push(LuaVal::new());
     }

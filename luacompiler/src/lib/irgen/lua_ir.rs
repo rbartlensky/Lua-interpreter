@@ -24,6 +24,7 @@ impl<'a> LuaIR<'a> {
             // we use a treemap in order to apply phis in order
             let mut substs: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
             let len = self.functions[f].blocks().len();
+            // gather all the phis
             for bb in 0..len {
                 for i in 0..self.functions[f].get_block(bb).instrs().len() {
                     let instr = self.functions[f].get_mut_block(bb).get_mut(i);
@@ -41,6 +42,7 @@ impl<'a> LuaIR<'a> {
                     }
                 }
             }
+            // perform the substitutions
             for (&k, v) in &substs {
                 for bb in 0..len {
                     let block = self.functions[f].get_mut_block(bb);

@@ -1,3 +1,7 @@
+//! The Gc, and GcRoot implementation is taken from the source code of the
+//! `gc` crate (https://github.com/Manishearth/rust-gc).
+//! This was done in order to avoid creating unnecessary Box allocations.
+
 pub mod gc_val;
 pub mod lua_closure;
 mod lua_obj;

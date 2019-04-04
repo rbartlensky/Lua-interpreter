@@ -31,6 +31,7 @@ enum AssignmentType {
     Regular = 2,
 }
 
+/// Represents the register which stores an expression, and where it is stored.
 enum ResultType {
     Local(usize),
     Global(usize),
@@ -48,6 +49,7 @@ impl ResultType {
 }
 
 #[derive(Clone, Copy)]
+/// The type of <var>, either a Name: `a`, `b`, or a table expression: `a["attr"]`.
 enum VarType<'a> {
     Name(&'a str),
     // from_reg , attr_reg
@@ -67,7 +69,9 @@ impl<'a> VarType<'a> {
 struct IRGen<'a> {
     pt: &'a LuaParseTree,
     functions: Vec<IRFunc<'a>>,
+    // the index of the function in which instructions are stored
     curr_func: usize,
+    // the index of the block in `curr_func`
     curr_block: usize,
 }
 
@@ -92,35 +96,47 @@ impl<'a> IRGen<'a> {
         LuaIR::new(self.functions, 0)
     }
 
+    /// Get the function that is currently compiled.
     fn curr_func(&mut self) -> &mut IRFunc<'a> {
         &mut self.functions[self.curr_func]
     }
 
+    /// Get the block that is currently compiled.
     fn curr_block(&mut self) -> &mut BasicBlock<'a> {
         let i = self.curr_block;
         self.functions[self.curr_func].get_mut_block(i)
     }
 
+    /// Get a block from the function that is currently compiled.
     fn get_block(&mut self, i: usize) -> &mut BasicBlock<'a> {
         self.functions[self.curr_func].get_mut_block(i)
     }
 
+    /// Get all the instructions of the block that is currently compiled.
     fn instrs(&mut self) -> &mut Vec<Instr> {
         self.curr_block().mut_instrs()
     }
 
+    /// Find a local register that is mapped to the given name, starting from
+    /// the block that is currently compiled.
     fn get_reg(&self, name: &'a str) -> Option<usize> {
         self.get_reg_from_block(name, self.curr_func, self.curr_block)
     }
 
+    /// Create a mapping between `name` and `reg` in the current block.
+    /// * `local_decl` - whether name is local to the current block
     fn set_reg_name(&mut self, reg: usize, name: &'a str, local_decl: bool) {
         self.curr_block().set_reg_name(reg, name, local_decl);
     }
 
+    /// Generate Phi instructions for the given block, in the current function.
     fn generate_phis_for_bb(&mut self, bb: usize) {
         self.curr_func().get_mut_block(bb).generate_phis();
     }
 
+    /// Find an upvalue with the given name.
+    /// If the value is found in a parent function, then the upvalues and provides
+    /// attributes are modified accordingly.
     fn get_upval(&mut self, name: &'a str) -> Option<usize> {
         // does the current function define the upvalue already?
         if let Some(&upval_idx) = self.curr_func().upvals().get(name) {
@@ -128,18 +144,23 @@ impl<'a> IRGen<'a> {
         }
         let mut func = self.curr_func().parent_func();
         let mut block = self.curr_func().parent_block();
-        // go through all the parents, and check if we can find <name>
+        // go through all the parents, and check if we can find `name`
         while func.is_some() {
-            // found <name>, so we can create a new upvalue, and load it
+            // found `name` in an ancestor of the current function
             if let Some(reg) = self.get_reg_from_block(name, func.unwrap(), block.unwrap()) {
+                // create the upvalue in the current function
                 let upval_idx = self.curr_func().push_upval(name);
+                // define a provider in the ancestor, because the ancestor provides
+                // `reg` as an upvalue to the current function
                 self.functions[func.unwrap()].push_provider(
                     self.curr_func,
+                    // + 1 because of _ENV
                     upval_idx + 1,
                     ProviderType::Reg(reg),
                 );
                 return Some(upval_idx);
             } else {
+                //
                 let p_func = &self.functions[func.unwrap()];
                 block = p_func.parent_block();
                 func = p_func.parent_func();
@@ -148,6 +169,8 @@ impl<'a> IRGen<'a> {
         None
     }
 
+    /// Emit an instruction which sets the `name` upvalue of the current function to `value`.
+    /// If the upvalue doesn't exist, then the value is written to _ENV["`name`"].
     fn set_upval(&mut self, name: &'a str, value: usize) {
         if let Some(upval_idx) = self.get_upval(name) {
             self.instrs().push(Instr::TwoArg(
@@ -165,6 +188,8 @@ impl<'a> IRGen<'a> {
         }
     }
 
+    /// Get the register which is mapped to `name` in the given function, starting from the given
+    /// basic block.
     fn get_reg_from_block(&self, name: &'a str, func: usize, bb: usize) -> Option<usize> {
         let curr_func = &self.functions[func];
         let curr_block = curr_func.get_block(bb);
@@ -181,6 +206,7 @@ impl<'a> IRGen<'a> {
         None
     }
 
+    /// Check if `name` is declared as `local` in any of the current block's dominators.
     fn is_locally_declared_in_doms(&self, name: &'a str) -> bool {
         let curr_func = &self.functions[self.curr_func];
         let curr_block = curr_func.get_block(self.curr_block);
@@ -192,6 +218,7 @@ impl<'a> IRGen<'a> {
         false
     }
 
+    /// Check if `name` is local to the current function.
     fn is_local(&self, name: &'a str) -> bool {
         self.get_reg(name).is_some()
     }
@@ -226,14 +253,16 @@ impl<'a> IRGen<'a> {
         self.curr_block
     }
 
-    /// Compile <retstatopt>
+    /// Compile a `retstatopt` expression.
     fn compile_retstat(&mut self, node: &'a Node<u8>) {
         match *node {
             Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
             } if ridx == lua5_3_y::R_RETSTATOPT => {
+                // nodes = [<RETURN>, <explistopt>, <semicolonopt>]
                 if nodes.len() > 0 {
+                    // get the expressions that are returned
                     let exprs = self.get_underlying_exprs(&nodes[1]);
                     // push the first n-1 return values to the stack
                     for i in 0..(exprs.len() - 1) {
@@ -241,15 +270,18 @@ impl<'a> IRGen<'a> {
                         self.instrs()
                             .push(Instr::TwoArg(Push, Arg::Reg(reg), Arg::Some(1)));
                     }
+                    // unpack the last expression
                     self.unpack_to_stack(&exprs.last().unwrap(), true);
                     self.instrs().push(Instr::ZeroArg(Ret));
                 }
             }
-            _ => panic!("Expected a <retstatopt>, but got {:#?}", node),
+            _ => panic!("Expected <retstatopt>; got {:#?}", node),
         }
     }
 
+    /// Unpack the given expression to the stack.
     fn unpack_to_stack(&mut self, last_expr: &'a Node<u8>, increment_ret_vals: bool) {
+        // compile the expression
         let reg = self.compile_expr(last_expr);
         if self.is_unpackable(last_expr) {
             {
@@ -269,6 +301,7 @@ impl<'a> IRGen<'a> {
             // no need to keep the previously allocated register
             self.curr_func().pop_last_reg();
         } else {
+            // not a function call or a vararg expression, thus we can simply emit a push
             if increment_ret_vals {
                 self.instrs()
                     .push(Instr::TwoArg(Push, Arg::Reg(reg), Arg::Some(1)));
@@ -278,7 +311,7 @@ impl<'a> IRGen<'a> {
         }
     }
 
-    /// Compile a <statlist> or a <statlistopt>.
+    /// Compile a `statlist` or a `statlistopt`.
     fn compile_stat_list(&mut self, node: &'a Node<u8>) {
         match *node {
             Nonterm {
@@ -303,15 +336,11 @@ impl<'a> IRGen<'a> {
                     self.compile_stat_list(&nodes[0]);
                 }
             }
-            _ => panic!(
-                "Expected a <statlist> or <statlistopt>, but got {:#?}",
-                node
-            ),
+            _ => panic!("Expected a <statlist> or <statlistopt>; got {:#?}", node),
         }
     }
 
     /// Compile the children of a <stat> node.
-    /// The method can only compile variable assignments.
     fn compile_stat(&mut self, stat_nodes: &'a Vec<Node<u8>>) {
         let len = stat_nodes.len();
         if len == 3 {
@@ -323,7 +352,9 @@ impl<'a> IRGen<'a> {
                         ridx: RIdx(ridx),
                         ref nodes,
                     } if ridx == lua5_3_y::R_EQEXPLISTOPT => {
+                        // compile lvalues
                         let names = self.compile_namelist(&stat_nodes[1]);
+                        // compile rvalues
                         let exprs = if nodes.len() > 0 {
                             self.get_underlying_exprs(&nodes[1])
                         } else {
@@ -334,6 +365,7 @@ impl<'a> IRGen<'a> {
                     _ => {}
                 }
             } else if is_term(&stat_nodes[0], lua5_3_l::T_DO) {
+                // stat_nodes = [<DO>, <block>, <END>]
                 self.compile_do_block(&stat_nodes[1]);
             } else {
                 match (&stat_nodes[0], &stat_nodes[1]) {
@@ -363,6 +395,7 @@ impl<'a> IRGen<'a> {
                     if nodes.len() == 2 {
                         self.compile_call(&nodes[0], &nodes[1])
                     } else {
+                        // nodes = [<prefixexp>, <COL>, <NAME>, <args>]
                         self.compile_method(&nodes[0], &nodes[2], &nodes[3])
                     }
                 }
@@ -378,6 +411,7 @@ impl<'a> IRGen<'a> {
                     &stat_nodes[5],
                 );
             } else if is_term(&stat_nodes[0], lua5_3_l::T_WHILE) {
+                // stat_nodes = [<WHILE>, <exp>, <DO>, <block>, <END>]
                 self.compile_while(&stat_nodes[1], &stat_nodes[3]);
             } else if is_term(&stat_nodes[0], lua5_3_l::T_FOR) && stat_nodes.len() == 9 {
                 // stat_nodes = [<FOR>, <NAME>, <EQ>, <exp>, <COMMA>,
@@ -397,7 +431,7 @@ impl<'a> IRGen<'a> {
     }
 
     /// Compiles a multi-assignemnt (a combination of local and global assignments).
-    /// * `names` - the variable names
+    /// * `names` - the variable 'names'
     /// * `exprs` - the expressions that are assigned
     /// * `is_local_decl` - if the assignments are preceeded by the `local` keyword
     fn compile_assignments(
@@ -407,11 +441,10 @@ impl<'a> IRGen<'a> {
         is_local_decl: bool,
     ) {
         // we want to emit _ENV[<name>] = <reg> only after we assign all expressions into
-        // registers. This is because of how vararg expects registers to be ordered.
-        // For instance `a, b = ...`, will generate `VarArg 3, 2, 0` meaning that the vm
-        // will copy two variable arguments into registers 3 and 4. We have to make sure
-        // that a, and b point to consecutive registers, but a global assignment will
-        // generate additional instructions, which we try to postpone
+        // registers. This is because the VM expects MovR instructions to be consecutive.
+        // For example `a, b = f()` does an unpacking operation, and we want the VM to know
+        // that we are unpacking two values. Thus, we first emit MovRs and then update _ENV
+        // with the new values of `a`, and `b`
         let mut postponed_instrs: Vec<(VarType<'a>, usize)> = vec![];
         // example: (local) x, y, z, w = 1, 2
         // compile x = 1, y = 2
@@ -433,10 +466,10 @@ impl<'a> IRGen<'a> {
                 _ => {}
             }
         }
-        // for all the remaining names (z, w), create a new empty register, and update
-        // _ENV if the variable has not been declared as local in some outer scope
         // names.len() == exprs.len() is intentionally left out because that case is
         // handled by the loop above
+        // for all the remaining names (z, w), create a new empty register, and try to unpack
+        // the last expression
         if names.len() > exprs.len() {
             let mut regs = vec![];
             for i in exprs.len()..names.len() {
@@ -456,6 +489,8 @@ impl<'a> IRGen<'a> {
                 }
                 regs.push(reg);
             }
+            // in case the last expression doesn't need to be unpacked, nil out the
+            // extra variables
             let mut assign_nils = true;
             if let Some(expr) = exprs.last() {
                 if self.is_unpackable(expr) {
@@ -494,6 +529,7 @@ impl<'a> IRGen<'a> {
         }
     }
 
+    /// Checks if the expression is a `functioncall` or a `vararg`.
     fn is_unpackable(&self, expr: &Node<u8>) -> bool {
         self.is_vararg(expr) || self.is_functioncall(expr)
     }
@@ -510,6 +546,7 @@ impl<'a> IRGen<'a> {
         }
     }
 
+    /// Load `name` into a register and return it.
     fn find_name(&mut self, name: &'a str) -> usize {
         match self.get_reg(name) {
             Some(reg) => reg,
@@ -535,12 +572,14 @@ impl<'a> IRGen<'a> {
         }
     }
 
+    /// Compile a `prefixexp`.
     fn compile_prefix_exp(&mut self, node: &'a Node<u8>) -> usize {
         match *node {
             Nonterm {
                 ridx: RIdx(ridx),
                 ref nodes,
             } if ridx == lua5_3_y::R_PREFIXEXP => {
+                // nodes = [<LBRACKET>, <exp>, <RBRACKET>]
                 if nodes.len() > 1 {
                     self.compile_expr(&nodes[1])
                 } else if is_nonterm(&nodes[0], lua5_3_y::R_FUNCTIONCALL) {
@@ -562,10 +601,11 @@ impl<'a> IRGen<'a> {
                     }
                 }
             }
-            _ => panic!("Expected <prefixexp>, got {:?}", node),
+            _ => panic!("Expected <prefixexp>; got {:?}", node),
         }
     }
 
+    /// Compile a `varlist`.
     fn compile_var_list(&self, node: &'a Node<u8>) -> Vec<&'a Node<u8>> {
         let mut vars = vec![];
         match *node {
@@ -573,20 +613,22 @@ impl<'a> IRGen<'a> {
                 ridx: RIdx(ridx),
                 ref nodes,
             } if ridx == lua5_3_y::R_VARLIST => {
+                // nodes = [<varlist>, <COMMA>, <var>]
                 if nodes.len() > 1 {
                     vars.extend(self.compile_var_list(&nodes[0]));
                     vars.push(&nodes[2]);
                 } else {
+                    // nodes = [<var>]
                     vars.push(&nodes[0]);
                 }
             }
-            _ => panic!("Expected <varlist> got {:?}", node),
+            _ => panic!("Expected <varlist>; got {:?}", node),
         }
         vars
     }
 
-    /// Compile an assignment by compiling <right> and then storing the result in <left>.
-    /// * `left` - The name of the variable in which the result is stored
+    /// Compile an assignment by compiling `right` and then storing the result in `var`.
+    /// * `var` - where the result is stored
     /// * `right` - The expression that is evaluated
     /// * `action` - How the compiler should behave, see @AssignmentType for more info.
     /// Returns whether the assignment was local or global.
@@ -642,6 +684,7 @@ impl<'a> IRGen<'a> {
         }
     }
 
+    /// Compile a `var` or `NAME`.
     fn compile_var_or_name(&mut self, node: &'a Node<u8>) -> VarType<'a> {
         match *node {
             Nonterm {
@@ -656,6 +699,7 @@ impl<'a> IRGen<'a> {
                     let expr = self.compile_expr(&nodes[2]);
                     VarType::Table(prefixexp, expr)
                 } else {
+                    // nodes = [<prefixexp>, <DOT>, <NAME>]
                     let prefixexp = self.compile_prefix_exp(&nodes[0]);
                     let string = self.get_str(&nodes[2]);
                     let reg = self.curr_func().get_new_reg();
@@ -674,8 +718,8 @@ impl<'a> IRGen<'a> {
         }
     }
 
-    /// Compile the expression rooted at <node>. Any instructions that are created are
-    /// simply added to the bytecode that is being generated.
+    /// Compile the expression rooted at `node`. Any instructions that are created are
+    /// simply added to the current block.
     fn compile_expr(&mut self, node: &'a Node<u8>) -> usize {
         match *node {
             Nonterm {
@@ -710,6 +754,7 @@ impl<'a> IRGen<'a> {
                 if nodes.len() > 1 {
                     self.compile_or_short_circuit(nodes)
                 } else {
+                    // nodes = [<exp1>]
                     self.compile_expr(&nodes[0])
                 }
             }
@@ -720,6 +765,7 @@ impl<'a> IRGen<'a> {
                 if nodes.len() > 1 {
                     self.compile_and_short_circuit(nodes)
                 } else {
+                    // nodes = [<exp2>]
                     self.compile_expr(&nodes[0])
                 }
             }
@@ -738,12 +784,14 @@ impl<'a> IRGen<'a> {
                 if nodes.len() == 1 {
                     self.compile_expr(&nodes[0])
                 } else if nodes.len() == 2 {
+                    // unary op
                     let right = self.compile_expr(&nodes[1]);
                     let new_var = self.curr_func().get_new_reg();
                     let instr = self.get_unary_instr(&nodes[0], new_var, right);
                     self.instrs().push(instr);
                     new_var
                 } else {
+                    // binop
                     debug_assert!(nodes.len() == 3);
                     let left = self.compile_expr(&nodes[0]);
                     let right = self.compile_expr(&nodes[2]);
@@ -810,14 +858,13 @@ impl<'a> IRGen<'a> {
                             .push(Instr::TwoArg(Mov, Arg::Reg(new_reg), Arg::Bool(true)));
                         new_reg
                     }
-                    _ => panic!(
-                        "Cannot compile terminals that are not variable names, numbers or strings."
-                    ),
+                    _ => panic!("Cannot compile {:?}", lexeme),
                 }
             }
         }
     }
 
+    /// Compile a `funcbody`.
     fn compile_funcbody(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
         let old_curr_func = self.curr_func;
         let old_curr_block = self.curr_block;
@@ -867,7 +914,7 @@ impl<'a> IRGen<'a> {
                     let upval_idx = if let Some(upval_idx) =
                         self.functions[self.curr_func].upvals().get(name)
                     {
-                        *upval_idx + 1
+                        *upval_idx + 1 // +1 because of _ENV upvalue
                     } else {
                         curr_func_upvals.push(*name);
                         curr_func_upvals_count += 1;
@@ -887,6 +934,7 @@ impl<'a> IRGen<'a> {
         reg
     }
 
+    /// Compile an `or` expression.
     fn compile_or_short_circuit(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
         let left = self.compile_expr(&nodes[0]);
         let parent = self.curr_block;
@@ -908,6 +956,7 @@ impl<'a> IRGen<'a> {
         merge_reg
     }
 
+    /// Compile an `and` expression.
     fn compile_and_short_circuit(&mut self, nodes: &'a Vec<Node<u8>>) -> usize {
         let left = self.compile_expr(&nodes[0]);
         let parent = self.curr_block;
@@ -929,8 +978,8 @@ impl<'a> IRGen<'a> {
         merge_reg
     }
 
-    /// Compile an and short circuit in which the lhs is in <left> and the rhs block
-    /// contains the instructions <right_operand_instrs>.
+    /// Compile an `and` short circuit in which the lhs is in `left` and the rhs block
+    /// contains the instructions `right_operand_instrs`.
     fn compile_and_short_circuit2(
         &mut self,
         left: usize,
@@ -979,7 +1028,7 @@ impl<'a> IRGen<'a> {
         merge_reg
     }
 
-    /// Compile an <explist> or <explistopt> and return the roots of the expressions.
+    /// Compile an `explist` or `explistopt` and return the roots of the expressions.
     fn get_underlying_exprs(&mut self, exprs: &'a Node<u8>) -> Vec<&'a Node<u8>> {
         match *exprs {
             Nonterm {
@@ -1008,10 +1057,11 @@ impl<'a> IRGen<'a> {
                     vec![]
                 }
             }
-            _ => panic!("Root node was not an <explist> or <explistopt>"),
+            _ => panic!("Expected <explist> or <explistopt>; got {:?}", exprs),
         }
     }
 
+    /// Get the string out of a `NAME`.
     fn get_str(&self, name: &'a Node<u8>) -> &'a str {
         match *name {
             Term { lexeme } if lexeme.tok_id() == lua5_3_l::T_NAME => self
@@ -1021,7 +1071,7 @@ impl<'a> IRGen<'a> {
         }
     }
 
-    /// Compile a <namelist> or a <varlist> into a vector of names.
+    /// Compile a `namelist` or a `varlist` into a vector of names.
     fn compile_names(&mut self, names: &'a Node<u8>) -> Vec<&'a str> {
         match *names {
             Nonterm {
@@ -1043,6 +1093,7 @@ impl<'a> IRGen<'a> {
         }
     }
 
+    /// Get the underlying `NAME` expressions.
     fn compile_namelist(&self, names: &'a Node<u8>) -> Vec<&'a Node<u8>> {
         match *names {
             Nonterm {
@@ -1064,10 +1115,9 @@ impl<'a> IRGen<'a> {
         }
     }
 
-    /// Compile a <parlist> node, and assign each name a register in the current
+    /// Compile a `parlist` node, and assign each name a register in the current
     /// register map.
     /// The first parameter of a function is assigned to register 0, and so on.
-    /// For now the vararg parameter is ignored.
     fn compile_param_list(&mut self, params: &'a Node<u8>) {
         match *params {
             Nonterm {
@@ -1097,11 +1147,11 @@ impl<'a> IRGen<'a> {
                     self.set_reg_name(reg, name, true);
                 }
             }
-            _ => panic!("Root node was not a <parlist>"),
+            _ => panic!("Expected <parlist>; got {:?}", params),
         }
     }
 
-    /// Compile a <functioncall>.
+    /// Compile a `functioncall`.
     fn compile_call(&mut self, func: &'a Node<u8>, params: &'a Node<u8>) {
         let func_reg = self.compile_prefix_exp(func);
         let params = match *params {
@@ -1323,7 +1373,7 @@ impl<'a> IRGen<'a> {
         }
     }
 
-    /// Compile an <elselist> or <elselistopt>.
+    /// Compile an `elselist` or `elselistopt`.
     fn get_elselist(&mut self, elselistopt: &'a Node<u8>) -> Vec<(&'a Node<u8>, &'a Node<u8>)> {
         let mut blocks = vec![];
         match *elselistopt {
@@ -1349,7 +1399,7 @@ impl<'a> IRGen<'a> {
                 }
             }
             _ => panic!(
-                "Expected an <elselist> or <elselistopt>, but got {:#?}",
+                "Expected an <elselist> or <elselistopt>; got {:#?}",
                 elselistopt
             ),
         }
@@ -1555,6 +1605,8 @@ impl<'a> IRGen<'a> {
         fields
     }
 
+    /// Compile the fields of table.
+    /// Note that this does not perform unpacking on the last field.
     fn compile_fields(&mut self, table_reg: usize, fields: Vec<&'a Node<u8>>) {
         let mut int_index = 1;
         for field in fields {

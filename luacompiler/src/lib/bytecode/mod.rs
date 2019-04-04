@@ -123,6 +123,7 @@ pub struct LuaBytecode {
 
 impl LuaBytecode {
     /// Create a new bytecode structure.
+    /// * `functions` - the functions of the bytecode
     /// * `main_function` - the id of the main function
     /// * `const_map` - a mapping between constants and their index in the constant table
     pub fn new(

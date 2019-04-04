@@ -79,13 +79,10 @@ pub struct Vm {
     pub registers: Vec<LuaVal>,
     pub stack: Vec<LuaVal>,
     pub top: usize,
+    // the call stack
     pub stack_frames: Vec<StackFrame>,
     pub curr_frame: usize,
-    /// All attributes of _ENV that are also part of the string constant table are stored
-    /// in a vector. Let's consider an example: "x" is mapped to index 2 in the constant
-    /// table. This means that _ENV["x"] = <val> will modify env_attrs[2]. If however
-    /// "x" was not in the constant table, then the lookup of the attribute would be
-    /// done via the `get_attr` method of the `LuaTable` struct.
+    // _ENV
     pub env: LuaVal,
     pub pc: usize,
 }
@@ -118,24 +115,29 @@ impl Vm {
     }
 
     fn init_stdlib_and_args(script_args: &Vec<&str>, env: &mut LuaVal) {
+        // set up command line arguments
         let args = LuaVal::from(UserTable::new(HashMap::new()));
         for (i, sarg) in script_args.iter().enumerate() {
             args.set_attr(LuaVal::from(i as i64), LuaVal::from(sarg.to_string()))
                 .unwrap();
         }
         env.set_attr(LuaVal::from("arg".to_string()), args).unwrap();
+        // set up standard functions such as: print, assert, etc.
         for func in STDLIB_FUNCS {
             env.set_attr(LuaVal::from(func.name().to_string()), LuaVal::from(func))
                 .unwrap();
         }
+        // set up io module
         let io = get_io_module();
         env.set_attr(LuaVal::from(io.0.as_str().to_string()), io.1)
             .unwrap();
+        // set up string module
         let string = get_string_module();
         env.set_attr(LuaVal::from(string.0.as_str().to_string()), string.1)
             .unwrap();
     }
 
+    /// Get the current executing closure.
     pub fn closure(&self) -> &LuaVal {
         &self.stack_frames[self.curr_frame].closure
     }
@@ -153,6 +155,7 @@ impl Vm {
         Ok(())
     }
 
+    /// Push `val` to the stack.
     pub fn push(&mut self, val: LuaVal) {
         if self.top < self.stack.len() {
             self.stack[self.top] = val;

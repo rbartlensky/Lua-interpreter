@@ -54,6 +54,7 @@ impl<'a> BcGen<'a> {
             self.blocks.insert(bb, instrs.len());
             self.compile_basic_block(i, bb, &mut instrs);
         }
+        // check which instructions need patching
         for (instr, bb) in &self.branches {
             if opcode(instrs[*instr]) == Opcode::Jmp as u8
                 || opcode(instrs[*instr]) == Opcode::JmpEq as u8
@@ -65,6 +66,7 @@ impl<'a> BcGen<'a> {
         }
         self.branches.clear();
         self.blocks.clear();
+        // generate the bytecode version of the provides mapping
         let provides: HashMap<u8, Vec<(BCProviderType, u8)>> = self.ir.functions[i]
             .provides()
             .iter()
