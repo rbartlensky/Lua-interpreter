@@ -4,7 +4,7 @@ import subprocess
 
 
 def run(name, bench, skip):
-    cmd = ['python3', './run.py', '-b', bench, '-n', str(1)]
+    cmd = ['python3', './run.py', '-b', bench, '-n', str(30)]
     if skip:
         cmd.append('--skip')
         cmd.extend(skip)

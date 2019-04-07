@@ -52,7 +52,7 @@ def run_bench(name, n, skip):
         mean = float(cols[1].split('+')[0])
         std_dev = float(cols[2])
         conf = confidence(std_dev, n)
-        print('Mean: {}, Std.Dev: {}, Confidence: {}'
+        print('Mean: {}, Std.Dev: {}, Margin of error: {}'
                   .format(mean, std_dev, conf))
         means.append((mean, conf))
     table_row = ''
